@@ -1,0 +1,898 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# =============================================================================
+# command_center.rb — a personal GitHub command center (CLI)
+# =============================================================================
+#
+# Prints one developer's current GitHub work queue in a single command.
+# Personal tool, single user, GitHub-only, serverless. Stdlib only.
+#
+# -----------------------------------------------------------------------------
+# WHAT IT SHOWS — four buckets (+ one bonus)
+# -----------------------------------------------------------------------------
+#   1. Reviews you owe        — open PRs where review is requested *from you*.
+#   2. Currently building     — your own open *draft* PRs (WIP).
+#   3. Assigned, not started  — Projects V2 issues assigned to you whose Status
+#                               is in a configurable "not started" set.
+#   4. Your PRs gone quiet    — your *ready* (non-draft) PRs where the ball is
+#                               on the reviewer and the wait exceeds a threshold.
+#   +  Ready, no reviewer     — your non-draft PRs with nobody asked to review
+#      requested (bonus)         and no reviews yet (invisible to everyone).
+#
+# Architecture: Engine -> buckets -> Surface, in three separable layers.
+#   * Engine   : pure, side-effect-free functions (GraphQL building, time math,
+#                classification). Unit-testable with zero network.
+#   * Buckets  : a plain hash the engine returns.
+#   * Surface  : consumes buckets and emits output. Two implementations behind
+#                one tiny contract (`render(buckets, ...) -> String` + `emit`).
+#
+# -----------------------------------------------------------------------------
+# SETUP
+# -----------------------------------------------------------------------------
+#   1. Create a classic Personal Access Token with scopes: repo, read:org,
+#      read:project.
+#   2. Export configuration:
+#        export GITHUB_TOKEN=ghp_xxx
+#        export GH_LOGIN=your-username
+#        export PROJECT_URL='https://github.com/orgs/YourOrg/projects/10/views/5'
+#   3. Run:
+#        ruby lib/command_center.rb              # terminal output (default)
+#        ruby lib/command_center.rb --browser    # render + open a static HTML page
+#        ruby lib/command_center.rb -b --watch 60  # live tab, refreshed every 60s
+#
+# -----------------------------------------------------------------------------
+# CONFIGURATION (CLI flags take precedence over env vars)
+# -----------------------------------------------------------------------------
+#   GITHUB_TOKEN          (required)  classic PAT: repo, read:org, read:project
+#   GH_LOGIN              (required)  your GitHub username
+#   OUTPUT / --browser,-b (terminal) surface: terminal | browser; flag forces
+#                                     browser and overrides OUTPUT
+#   WATCH_SECONDS / --watch N  (0)    browser only: re-fetch + rewrite every N s
+#   PROJECT_URL           (for #3)    board/view URL; org + project number read
+#   NOT_STARTED_STATUSES  (Todo,Backlog,No Status)  case-insensitive status set
+#   ITERATION_FILTER      (off)       `current` restricts #3 to the active sprint
+#   ITERATION_FIELD       (Iteration) board's iteration field name
+#   STALE_DAYS            (2)         threshold for bucket #4
+#   DAY_MODE              (business)  business (skip Sat/Sun) | calendar
+#
+# -----------------------------------------------------------------------------
+# PUSH LAYER (terminal mode) — no scheduler code lives in this tool.
+# -----------------------------------------------------------------------------
+# Wire it into your own weekday-morning cron, piping terminal output to a
+# notifier. Examples (crontab, 8:30am Mon-Fri):
+#
+#   30 8 * * 1-5  GITHUB_TOKEN=... GH_LOGIN=you PROJECT_URL=... \
+#                 ruby /path/lib/command_center.rb | mail -s "Command center" you@example.com
+#
+#   # or, on a Linux desktop:
+#   30 8 * * 1-5  ... ruby /path/lib/command_center.rb | head -c 4000 | \
+#                 xargs -0 notify-send "Command center"
+#
+#   # or, on macOS:
+#   30 8 * * 1-5  ... ruby /path/lib/command_center.rb | \
+#                 terminal-notifier -title "Command center"
+#
+# Terminal output is plain text (no ANSI), safe to pipe to `mail`. Browser mode
+# is for interactive/ambient use (optionally with --watch), not cron.
+#
+# -----------------------------------------------------------------------------
+# NON-GOALS / KNOWN LIMITATIONS
+# -----------------------------------------------------------------------------
+#   * The saved *view* filter DSL is NOT replicated; #3 is approximated by
+#     Status (+ optional iteration). Only org + project number are read from
+#     PROJECT_URL; the view number is ignored.
+#   * "Commented" reviews are intentionally ignored — a comment doesn't flip
+#     the ball back to the reviewer.
+#   * Any push (incl. a typo fix or rebase/force-push) resets the #4 clock by
+#     design ("you resubmitted"). To instead reset only on an explicit
+#     re-request, drop `last_push` from `handoff_at` (see Engine.handoff_at).
+#   * Browser mode is a STATIC snapshot rendered in-process: no client-side
+#     GitHub calls, no live data except via --watch re-runs. The token never
+#     reaches the page.
+#   * Single user, single token, no multi-tenant concerns.
+#
+# Browser/watch note: meta-refresh over file:// is supported in current Chrome,
+# Firefox, and Safari, so the open tab reloads itself from the same file://
+# path in watch mode.
+# =============================================================================
+
+require "net/http"
+require "json"
+require "date"
+require "time"
+require "tmpdir"
+require "rbconfig"
+
+module CommandCenter
+  VERSION = "1.0.0"
+  GRAPHQL_ENDPOINT = "https://api.github.com/graphql"
+  HTML_PATH = File.join(Dir.tmpdir, "command_center.html")
+
+  # ---------------------------------------------------------------------------
+  # Engine — pure, side-effect-free. No network, no ENV, no I/O.
+  # ---------------------------------------------------------------------------
+  module Engine
+    module_function
+
+    # -- time helpers ---------------------------------------------------------
+
+    # Parse an ISO8601 timestamp string into a Time (UTC). Passes Time/nil
+    # through unchanged.
+    def parse_time(value)
+      return nil if value.nil?
+      return value if value.is_a?(Time)
+      Time.iso8601(value.to_s)
+    rescue ArgumentError
+      Time.parse(value.to_s)
+    end
+
+    # Coerce a Time/Date/String into a Date (UTC for Times) for day counting.
+    def to_date(value)
+      case value
+      when Date then value
+      when Time then value.utc.to_date
+      else Date.parse(value.to_s)
+      end
+    end
+
+    # Whole days between `time` and `today`, floored at 0.
+    #   calendar : every calendar day, weekends included.
+    #   business : count of Mon-Fri dates in [from_date, today). A Friday
+    #              handoff is "1 business day" the following Monday.
+    def days_since(time, mode:, today:)
+      from = to_date(time)
+      now  = to_date(today)
+      case mode.to_s
+      when "calendar"
+        [(now - from).to_i, 0].max
+      else # "business"
+        return 0 if now <= from
+        count = 0
+        d = from
+        while d < now
+          count += 1 if (1..5).cover?(d.wday) # Mon=1 .. Fri=5
+          d += 1
+        end
+        count
+      end
+    end
+
+    # -- bucket #4: the handoff-vs-reviewer race ------------------------------
+    # Operates on raw GraphQL PR node hashes (string keys) so the same code
+    # classifies fixtures and live data.
+
+    # Latest REVIEW_REQUESTED_EVENT time, or nil.
+    def last_review_requested_at(pr)
+      nodes = pr.dig("timelineItems", "nodes") || []
+      times = nodes.map { |n| parse_time(n["createdAt"]) }.compact
+      times.max
+    end
+
+    # Time of the last commit on the PR, or nil.
+    def last_push_at(pr)
+      nodes = pr.dig("commits", "nodes") || []
+      times = nodes.map { |n| parse_time(n.dig("commit", "committedDate")) }.compact
+      times.max
+    end
+
+    # The last moment YOU put the ball in the reviewer's court.
+    # To reset only on explicit re-request, drop last_push_at below.
+    def handoff_at(pr)
+      candidates = [
+        last_review_requested_at(pr),
+        last_push_at(pr),
+        parse_time(pr["createdAt"])
+      ].compact
+      candidates.max
+    end
+
+    # The reviewer's last *decisive* action. Plain COMMENTED reviews do not
+    # count (latestOpinionatedReviews already excludes them; we filter again
+    # defensively).
+    def reviewer_last_action_at(pr)
+      nodes = pr.dig("latestOpinionatedReviews", "nodes") || []
+      times = nodes
+              .reject { |n| n["state"].to_s.upcase == "COMMENTED" }
+              .map { |n| parse_time(n["submittedAt"]) }
+              .compact
+      times.max
+    end
+
+    def has_reviewer?(pr)
+      (pr.dig("reviewRequests", "totalCount").to_i > 0) ||
+        !last_review_requested_at(pr).nil? ||
+        !reviewer_last_action_at(pr).nil?
+    end
+
+    # Ball is on the reviewer when your handoff is newer than their last
+    # decisive action, or they never acted.
+    def ball_on_reviewer?(pr)
+      return false unless has_reviewer?(pr)
+      action = reviewer_last_action_at(pr)
+      action.nil? || handoff_at(pr) > action
+    end
+
+    def stale?(pr, stale_days:, mode:, today:)
+      return false if pr["isDraft"]
+      return false unless ball_on_reviewer?(pr)
+      days_since(handoff_at(pr), mode: mode, today: today) >= stale_days
+    end
+
+    def forgot_reviewer?(pr)
+      !pr["isDraft"] && !has_reviewer?(pr)
+    end
+
+    # -- bucket #3: Projects V2 Status ----------------------------------------
+
+    # Flatten an item's single-select field values into {field_name => value}.
+    def single_select_fields(item)
+      nodes = item.dig("fieldValues", "nodes") || []
+      out = {}
+      nodes.each do |n|
+        next unless n["__typename"] == "ProjectV2ItemFieldSingleSelectValue"
+        fname = n.dig("field", "name")
+        out[fname] = n["name"] if fname
+      end
+      out
+    end
+
+    # The item's iteration value node for the named field, or nil.
+    def iteration_value(item, iteration_field)
+      nodes = item.dig("fieldValues", "nodes") || []
+      nodes.find do |n|
+        n["__typename"] == "ProjectV2ItemFieldIterationValue" &&
+          n.dig("field", "name") == iteration_field
+      end
+    end
+
+    # Keep items that are Issues assigned to `login` whose Status is in the
+    # not-started set (case-insensitive, trimmed). When iteration filtering is
+    # on and an iteration field exists, also require the active iteration.
+    def assigned_not_started(items, login:, not_started:,
+                             iteration_filter: "off",
+                             iteration_field: "Iteration",
+                             iterations: nil, today: nil)
+      wanted = not_started.map { |s| s.to_s.strip.downcase }
+      active = nil
+      filtering = iteration_filter.to_s == "current" && iterations && !iterations.empty?
+      active = active_iteration(iterations, today: today) if filtering
+
+      items.select do |item|
+        content = item["content"]
+        next false unless content && content["__typename"] == "Issue"
+
+        assignees = (content.dig("assignees", "nodes") || []).map { |a| a["login"] }
+        next false unless assignees.include?(login)
+
+        status = single_select_fields(item)["Status"]
+        next false unless status && wanted.include?(status.strip.downcase)
+
+        if filtering
+          # No iteration field on the board -> active is nil -> no-op (keep).
+          next true if active.nil?
+          iv = iteration_value(item, iteration_field)
+          next false unless iv
+          next false unless iv["startDate"].to_s == active["startDate"].to_s
+        end
+
+        true
+      end
+    end
+
+    # -- current-sprint filter (§6) -------------------------------------------
+
+    # The iteration whose [startDate, startDate + duration) range contains
+    # today, or nil.
+    def active_iteration(iterations, today:)
+      return nil if iterations.nil? || iterations.empty?
+      td = to_date(today)
+      iterations.find do |it|
+        sd = to_date(it["startDate"])
+        ed = sd + it["duration"].to_i # exclusive end
+        td >= sd && td < ed
+      end
+    end
+
+    # -- URL parsing ----------------------------------------------------------
+
+    # Parse org + project number from a board/view URL. Returns
+    # {org:, num:} or nil. The view number is ignored by design.
+    def parse_project_url(url)
+      return nil if url.nil? || url.to_s.empty?
+      m = url.to_s.match(%r{/orgs/([^/]+)/projects/(\d+)})
+      return nil unless m
+      { org: m[1], num: m[2].to_i }
+    end
+
+    # -- search strings -------------------------------------------------------
+
+    def reviews_owed_query(login)
+      "is:open is:pr review-requested:#{login} archived:false"
+    end
+
+    def my_prs_query(login)
+      "is:open is:pr author:#{login} archived:false"
+    end
+
+    # -- GraphQL builders -----------------------------------------------------
+
+    # The shared PR field selection used by both aliased searches.
+    PR_FIELDS = <<~GQL
+      number
+      title
+      url
+      isDraft
+      reviewDecision
+      createdAt
+      repository { nameWithOwner }
+      reviewRequests(first: 1) { totalCount }
+      commits(last: 1) { nodes { commit { committedDate } } }
+      timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 1) {
+        nodes { ... on ReviewRequestedEvent { createdAt } }
+      }
+      latestOpinionatedReviews(first: 10) { nodes { state submittedAt } }
+    GQL
+
+    # One GraphQL document running BOTH PR searches via aliases.
+    def build_pr_query
+      <<~GQL
+        query($owed: String!, $mine: String!) {
+          owed: search(query: $owed, type: ISSUE, first: 50) {
+            nodes { ... on PullRequest { #{PR_FIELDS} } }
+          }
+          mine: search(query: $mine, type: ISSUE, first: 50) {
+            nodes { ... on PullRequest { #{PR_FIELDS} } }
+          }
+        }
+      GQL
+    end
+
+    # Paginated board query (100 items/page). Also pulls the iteration field
+    # configuration for §6.
+    def build_board_query
+      <<~GQL
+        query($org: String!, $num: Int!, $cursor: String) {
+          organization(login: $org) {
+            projectV2(number: $num) {
+              fields(first: 50) {
+                nodes {
+                  ... on ProjectV2IterationField {
+                    name
+                    configuration {
+                      iterations { title startDate duration }
+                      completedIterations { title startDate duration }
+                    }
+                  }
+                }
+              }
+              items(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  fieldValues(first: 20) {
+                    nodes {
+                      __typename
+                      ... on ProjectV2ItemFieldSingleSelectValue {
+                        name
+                        field { ... on ProjectV2SingleSelectField { name } }
+                      }
+                      ... on ProjectV2ItemFieldIterationValue {
+                        title
+                        startDate
+                        duration
+                        field { ... on ProjectV2IterationField { name } }
+                      }
+                    }
+                  }
+                  content {
+                    __typename
+                    ... on Issue {
+                      number
+                      title
+                      url
+                      state
+                      assignees(first: 10) { nodes { login } }
+                      repository { nameWithOwner }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      GQL
+    end
+
+    # -- normalization & classification --------------------------------------
+
+    def normalize_pr(pr, extra = {})
+      {
+        number: pr["number"],
+        title: pr["title"],
+        url: pr["url"],
+        repo: pr.dig("repository", "nameWithOwner")
+      }.merge(extra)
+    end
+
+    def normalize_item(item)
+      content = item["content"]
+      {
+        number: content["number"],
+        title: content["title"],
+        url: content["url"],
+        repo: content.dig("repository", "nameWithOwner")
+      }
+    end
+
+    # Turn raw fetched data into the buckets hash. Pure: takes already-fetched
+    # node arrays plus config, returns the classified hash that both surfaces
+    # consume. Surfaces never re-query or re-classify.
+    #
+    # config keys: :login, :not_started, :stale_days, :day_mode,
+    #              :iteration_filter, :iteration_field
+    def classify(owed_prs:, my_prs:, project_items:, iterations: nil,
+                 config:, today:)
+      mode = config[:day_mode]
+      stale_days = config[:stale_days]
+
+      reviews_owed = owed_prs.map { |pr| normalize_pr(pr) }
+
+      wip = my_prs.select { |pr| pr["isDraft"] }.map { |pr| normalize_pr(pr) }
+
+      stale = my_prs.select { |pr| stale?(pr, stale_days: stale_days, mode: mode, today: today) }
+                    .map do |pr|
+        normalize_pr(pr,
+                     days: days_since(handoff_at(pr), mode: mode, today: today),
+                     mode: mode)
+      end
+
+      forgot = my_prs.select { |pr| forgot_reviewer?(pr) }.map { |pr| normalize_pr(pr) }
+
+      assigned = assigned_not_started(
+        project_items,
+        login: config[:login],
+        not_started: config[:not_started],
+        iteration_filter: config[:iteration_filter],
+        iteration_field: config[:iteration_field],
+        iterations: iterations,
+        today: today
+      ).map { |item| normalize_item(item) }
+
+      {
+        reviews_owed: reviews_owed,
+        wip: wip,
+        assigned_not_started: assigned,
+        stale: stale,
+        forgot_reviewer: forgot
+      }
+    end
+
+    # Ordered metadata describing each bucket, shared by both surfaces.
+    BUCKETS = [
+      [:reviews_owed,         "Reviews you owe",            "Nothing waiting on your review. \u{1F389}"],
+      [:wip,                  "Currently building (WIP)",   "No drafts in flight."],
+      [:assigned_not_started, "Assigned, not started",      "Nothing assigned and waiting to start."],
+      [:stale,                "Your PRs gone quiet",        "No PRs have gone quiet."],
+      [:forgot_reviewer,      "Ready, no reviewer requested", "Every ready PR has a reviewer."]
+    ].freeze
+  end
+
+  # ---------------------------------------------------------------------------
+  # Surface — dispatch + shared helpers
+  # ---------------------------------------------------------------------------
+  module Surface
+    module_function
+
+    # Resolve the surface preference. --browser/-b (browser_flag:true) wins;
+    # otherwise OUTPUT env decides; default terminal.
+    def resolve_surface(output_env:, browser_flag:)
+      return :browser if browser_flag
+      output_env.to_s.strip.downcase == "browser" ? :browser : :terminal
+    end
+
+    # Pure builder for the OS "open this file" command. Not executed here so it
+    # can be unit-tested. For Windows pass the plain path; otherwise a file://
+    # URL.
+    def browser_open_command(host_os, file_url)
+      case host_os
+      when /mswin|mingw|cygwin|windows/i
+        ["cmd", "/c", "start", "", file_url]
+      when /darwin|mac/i
+        ["open", file_url]
+      else
+        ["xdg-open", file_url]
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Terminal surface — plain text, pipe-friendly (no ANSI).
+  # ---------------------------------------------------------------------------
+  module TerminalSurface
+    module_function
+
+    def render(buckets, config:, generated_at:)
+      lines = []
+      lines << "Command center for @#{config[:login]}  —  #{generated_at.strftime('%Y-%m-%d %H:%M')}  (#{config[:day_mode]} days)"
+      lines << ("=" * 72)
+
+      Engine::BUCKETS.each do |key, title, empty|
+        rows = buckets[key] || []
+        lines << ""
+        lines << "#{title} (#{rows.size})"
+        lines << ("-" * title.length)
+        if rows.empty?
+          lines << "  #{empty}"
+          next
+        end
+        rows.each do |row|
+          suffix =
+            if key == :stale && row[:days]
+              "  — #{row[:days]} #{row[:mode]} days since you handed off"
+            else
+              ""
+            end
+          lines << "  ##{row[:number]} #{row[:title]}  (#{row[:repo]})#{suffix}"
+          lines << "    #{row[:url]}"
+        end
+      end
+      lines << ""
+      lines.join("\n")
+    end
+
+    # The terminal surface's emit contract: print to stdout.
+    def emit(output)
+      $stdout.puts(output)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Browser surface — one self-contained, offline-capable HTML file.
+  # ---------------------------------------------------------------------------
+  module BrowserSurface
+    module_function
+
+    def escape(text)
+      text.to_s
+          .gsub("&", "&amp;")
+          .gsub("<", "&lt;")
+          .gsub(">", "&gt;")
+          .gsub('"', "&quot;")
+          .gsub("'", "&#39;")
+    end
+
+    # Render a single self-contained HTML document. SECURITY: receives only
+    # already-fetched display data — never a token or any secret. Inline CSS,
+    # no external/CDN assets, works offline over file://.
+    def render(buckets, config:, generated_at:, watch_seconds: 0)
+      refresh =
+        if watch_seconds.to_i > 0
+          %(<meta http-equiv="refresh" content="#{watch_seconds.to_i}">)
+        else
+          ""
+        end
+
+      sections = Engine::BUCKETS.map do |key, title, empty|
+        rows = buckets[key] || []
+        warn_class = key == :stale ? " warn" : ""
+        cards =
+          if rows.empty?
+            %(<p class="empty">#{escape(empty)}</p>)
+          else
+            rows.map { |row| card(row, key) }.join("\n")
+          end
+        <<~SECTION
+          <section class="bucket#{warn_class}">
+            <h2>#{escape(title)} <span class="count">#{rows.size}</span></h2>
+            #{cards}
+          </section>
+        SECTION
+      end.join("\n")
+
+      <<~HTML
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        #{refresh}
+        <title>Command center — @#{escape(config[:login])}</title>
+        <style>#{css}</style>
+        </head>
+        <body>
+        <header>
+          <h1>Command center</h1>
+          <p class="meta">@#{escape(config[:login])} &middot; #{escape(generated_at.strftime('%Y-%m-%d %H:%M'))} &middot; #{escape(config[:day_mode])} days#{watch_seconds.to_i > 0 ? " &middot; live (#{watch_seconds.to_i}s)" : ""}</p>
+        </header>
+        <main>
+        #{sections}
+        </main>
+        </body>
+        </html>
+      HTML
+    end
+
+    def card(row, key)
+      badge =
+        if key == :stale && row[:days]
+          %(<span class="badge">#{row[:days]} #{escape(row[:mode])} days waiting</span>)
+        else
+          ""
+        end
+      <<~CARD
+        <a class="card" href="#{escape(row[:url])}" target="_blank" rel="noopener">
+          <span class="num">##{escape(row[:number])}</span>
+          <span class="title">#{escape(row[:title])}</span>
+          <span class="repo">#{escape(row[:repo])}</span>
+          #{badge}
+        </a>
+      CARD
+    end
+
+    def css
+      <<~CSS
+        :root{--bg:#f6f8fa;--fg:#1f2328;--muted:#656d76;--card:#fff;--border:#d0d7de;--accent:#0969da;--warn:#bc4c00;--warnbg:#fff8f0}
+        @media (prefers-color-scheme: dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--card:#161b22;--border:#30363d;--accent:#58a6ff;--warn:#db6d28;--warnbg:#1f1206}}
+        *{box-sizing:border-box}
+        body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.4}
+        header{padding:24px 20px 8px}
+        h1{margin:0;font-size:1.6rem}
+        .meta{margin:4px 0 0;color:var(--muted);font-size:.9rem}
+        main{max-width:880px;margin:0 auto;padding:8px 16px 48px}
+        .bucket{margin:24px 0}
+        h2{font-size:1.1rem;border-bottom:1px solid var(--border);padding-bottom:6px;display:flex;align-items:center;gap:8px}
+        .count{background:var(--border);color:var(--fg);border-radius:999px;font-size:.8rem;padding:1px 9px;font-weight:600}
+        .bucket.warn h2{color:var(--warn)}
+        .bucket.warn .count{background:var(--warn);color:#fff}
+        .empty{color:var(--muted);font-style:italic;margin:8px 0}
+        .card{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:8px 0}
+        .card:hover{border-color:var(--accent)}
+        .bucket.warn .card{background:var(--warnbg);border-color:var(--warn)}
+        .num{color:var(--muted);font-variant-numeric:tabular-nums;font-weight:600}
+        .title{font-weight:600;flex:1 1 auto;min-width:200px}
+        .repo{color:var(--muted);font-size:.85rem}
+        .badge{background:var(--warn);color:#fff;border-radius:6px;font-size:.75rem;padding:2px 8px;white-space:nowrap}
+      CSS
+    end
+
+    # Write the HTML to a stable temp path (so watch-mode reload hits the same
+    # tab). Returns the path.
+    def write(html, path = HTML_PATH)
+      File.write(path, html)
+      path
+    end
+
+    # The browser surface's emit contract: write the file and (optionally) open
+    # it. Returns the file path.
+    def emit(html, path: HTML_PATH, open: true, host_os: RbConfig::CONFIG["host_os"])
+      write(html, path)
+      open_in_browser(path, host_os: host_os) if open
+      path
+    end
+
+    def open_in_browser(path, host_os: RbConfig::CONFIG["host_os"])
+      # Windows uses the plain path; POSIX uses a file:// URL.
+      arg = host_os =~ /mswin|mingw|cygwin|windows/i ? path : "file://#{path}"
+      cmd = Surface.browser_open_command(host_os, arg)
+      system(*cmd)
+    rescue StandardError => e
+      $stderr.puts "command_center: could not open browser (#{e.message}); page at #{path}"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # GitHub — the only network layer.
+  # ---------------------------------------------------------------------------
+  module GitHub
+    module_function
+
+    def graphql(query, variables, token)
+      uri = URI(GRAPHQL_ENDPOINT)
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = true
+      req = Net::HTTP::Post.new(uri)
+      req["Authorization"] = "Bearer #{token}"
+      req["Content-Type"] = "application/json"
+      req["User-Agent"] = "command_center/#{VERSION}"
+      req.body = JSON.generate(query: query, variables: variables)
+
+      res = http.request(req)
+      body = JSON.parse(res.body)
+      if body["errors"] && !body["errors"].empty?
+        raise "GraphQL error: #{body['errors'].map { |e| e['message'] }.join('; ')}"
+      end
+      unless res.is_a?(Net::HTTPSuccess)
+        raise "HTTP #{res.code}: #{res.body}"
+      end
+      body["data"]
+    end
+
+    # Run both PR searches in one call. Returns [owed_nodes, mine_nodes].
+    def fetch_prs(login, token)
+      data = graphql(
+        Engine.build_pr_query,
+        { "owed" => Engine.reviews_owed_query(login),
+          "mine" => Engine.my_prs_query(login) },
+        token
+      )
+      owed = (data.dig("owed", "nodes") || []).reject(&:empty?)
+      mine = (data.dig("mine", "nodes") || []).reject(&:empty?)
+      [owed, mine]
+    end
+
+    # Paginated board fetch. Returns [items, iterations_config].
+    def fetch_board(org, num, token, iteration_field: "Iteration")
+      items = []
+      iterations = nil
+      cursor = nil
+      loop do
+        data = graphql(
+          Engine.build_board_query,
+          { "org" => org, "num" => num, "cursor" => cursor },
+          token
+        )
+        project = data.dig("organization", "projectV2")
+        return [[], nil] if project.nil?
+
+        if iterations.nil?
+          field = (project.dig("fields", "nodes") || []).find do |f|
+            f && f["name"] == iteration_field && f["configuration"]
+          end
+          if field
+            cfg = field["configuration"]
+            iterations = (cfg["iterations"] || []) + (cfg["completedIterations"] || [])
+          end
+        end
+
+        page = project["items"]
+        items.concat(page["nodes"] || [])
+        info = page["pageInfo"] || {}
+        break unless info["hasNextPage"]
+        cursor = info["endCursor"]
+      end
+      [items, iterations]
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Config — resolve env + CLI flags (flags take precedence).
+  # ---------------------------------------------------------------------------
+  module Config
+    module_function
+
+    def from(env:, argv:)
+      flags = parse_flags(argv)
+
+      not_started = (env["NOT_STARTED_STATUSES"] || "Todo,Backlog,No Status")
+                    .split(",").map(&:strip).reject(&:empty?)
+
+      {
+        token: env["GITHUB_TOKEN"],
+        login: env["GH_LOGIN"],
+        project_url: env["PROJECT_URL"],
+        not_started: not_started,
+        iteration_filter: (env["ITERATION_FILTER"] || "off"),
+        iteration_field: (env["ITERATION_FIELD"] || "Iteration"),
+        stale_days: (env["STALE_DAYS"] || "2").to_i,
+        day_mode: (env["DAY_MODE"] || "business"),
+        output_env: (env["OUTPUT"] || "terminal"),
+        browser_flag: flags[:browser],
+        watch_seconds: flags.key?(:watch) ? flags[:watch] : (env["WATCH_SECONDS"] || "0").to_i
+      }
+    end
+
+    def parse_flags(argv)
+      flags = {}
+      i = 0
+      while i < argv.length
+        case argv[i]
+        when "--browser", "-b"
+          flags[:browser] = true
+        when "--watch"
+          flags[:watch] = argv[i + 1].to_i
+          i += 1
+        when /\A--watch=(\d+)\z/
+          flags[:watch] = Regexp.last_match(1).to_i
+        end
+        i += 1
+      end
+      flags
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # CLI — wires it all together (the only place with side effects + ENV).
+  # ---------------------------------------------------------------------------
+  module CLI
+    module_function
+
+    def run(env: ENV, argv: ARGV)
+      config = Config.from(env: env, argv: argv)
+      validate!(config)
+
+      surface = Surface.resolve_surface(
+        output_env: config[:output_env],
+        browser_flag: config[:browser_flag]
+      )
+
+      if surface == :browser && config[:watch_seconds].to_i > 0
+        run_watch(config)
+      elsif surface == :browser
+        buckets = fetch_and_classify(config)
+        html = BrowserSurface.render(buckets, config: config,
+                                              generated_at: Time.now,
+                                              watch_seconds: 0)
+        path = BrowserSurface.emit(html)
+        $stderr.puts "command_center: wrote #{path}"
+        warn_no_project(config)
+      else
+        buckets = fetch_and_classify(config)
+        output = TerminalSurface.render(buckets, config: config, generated_at: Time.now)
+        TerminalSurface.emit(output)
+        warn_no_project(config)
+      end
+    end
+
+    def run_watch(config)
+      first = true
+      loop do
+        buckets = fetch_and_classify(config)
+        html = BrowserSurface.render(buckets, config: config,
+                                              generated_at: Time.now,
+                                              watch_seconds: config[:watch_seconds])
+        path = BrowserSurface.emit(html, open: first)
+        $stderr.puts "command_center: refreshed #{path} (#{Time.now.strftime('%H:%M:%S')})"
+        first = false
+        sleep config[:watch_seconds]
+      end
+    rescue Interrupt
+      $stderr.puts "\ncommand_center: watch stopped."
+    end
+
+    # Fetch everything, then classify once. The buckets feed whichever surface.
+    def fetch_and_classify(config)
+      owed, mine = GitHub.fetch_prs(config[:login], config[:token])
+
+      project_items = []
+      iterations = nil
+      if config[:project_url]
+        parsed = Engine.parse_project_url(config[:project_url])
+        if parsed
+          project_items, iterations = GitHub.fetch_board(
+            parsed[:org], parsed[:num], config[:token],
+            iteration_field: config[:iteration_field]
+          )
+        end
+      end
+
+      Engine.classify(
+        owed_prs: owed,
+        my_prs: mine,
+        project_items: project_items,
+        iterations: iterations,
+        config: config,
+        today: Time.now
+      )
+    end
+
+    def validate!(config)
+      missing = []
+      missing << "GITHUB_TOKEN" unless config[:token] && !config[:token].empty?
+      missing << "GH_LOGIN" unless config[:login] && !config[:login].empty?
+      return if missing.empty?
+      $stderr.puts "command_center: missing required configuration: #{missing.join(', ')}"
+      $stderr.puts "See the header of this file for setup instructions."
+      exit 1
+    end
+
+    def warn_no_project(config)
+      return if config[:project_url] && !config[:project_url].empty?
+      $stderr.puts "command_center: PROJECT_URL unset — 'Assigned, not started' will be empty."
+    end
+  end
+end
+
+# Guard: tests can `require` this file without running or reading ENV.
+if __FILE__ == $PROGRAM_NAME
+  CommandCenter::CLI.run
+end
