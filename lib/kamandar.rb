@@ -33,10 +33,11 @@
 # -----------------------------------------------------------------------------
 #   1. Create a classic Personal Access Token with scopes: repo, read:org,
 #      read:project.
-#   2. Export configuration:
+#   2. Export the two required values:
 #        export GITHUB_TOKEN=ghp_xxx
 #        export GH_LOGIN=your-username
-#        export PROJECT_URL='https://github.com/orgs/YourOrg/projects/10/views/5'
+#      (PROJECT_URL is optional — the scope picker asks for it when you choose
+#       project scope; set it only to wire bucket #3 non-interactively.)
 #   3. Run:
 #        ruby lib/kamandar.rb              # terminal output (default)
 #        ruby lib/kamandar.rb --browser    # render + open a static HTML page

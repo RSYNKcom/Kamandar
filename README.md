@@ -68,12 +68,16 @@ cd Kamandar
 
 export GITHUB_TOKEN=ghp_xxx          # classic PAT: repo, read:org, read:project
 export GH_LOGIN=your-username
-export PROJECT_URL='https://github.com/orgs/YourOrg/projects/10/views/5'
 
 ruby lib/kamandar.rb             # terminal output (default)
 ruby lib/kamandar.rb --browser   # render + open a static HTML page
 ruby lib/kamandar.rb -b --watch 60   # live tab, refreshed every 60s
 ```
+
+> `PROJECT_URL` is **optional** — the [scope picker](#-scope) asks for the board
+> URL when you choose `project`. Set it only if you want bucket #3
+> (*Assigned, not started*) populated without picking project scope, or for
+> non-interactive runs (cron).
 
 Put it on your `PATH` if you like:
 
