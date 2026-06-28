@@ -13,6 +13,7 @@
 require_relative "../lib/kamandar"
 require "date"
 require "time"
+require "stringio"
 
 E = Kamandar::Engine
 S = Kamandar::Surface
@@ -157,6 +158,22 @@ check "#3 project filter keeps mine+Todo and mine+Backlog",
       kept.map { |i| i["content"]["number"] }.sort, [1, 4]
 
 # =============================================================================
+# Search query scoping
+# =============================================================================
+check "owed query is account-wide without org",
+      E.reviews_owed_query("me"),
+      "is:open is:pr review-requested:me archived:false"
+check "owed query scoped to org when given",
+      E.reviews_owed_query("me", org: "Recognize"),
+      "is:open is:pr review-requested:me org:Recognize archived:false"
+check "mine query scoped to org when given",
+      E.my_prs_query("me", org: "Recognize"),
+      "is:open is:pr author:me org:Recognize archived:false"
+check "empty org is treated as no scope",
+      E.my_prs_query("me", org: ""),
+      "is:open is:pr author:me archived:false"
+
+# =============================================================================
 # URL parse
 # =============================================================================
 check "URL parse orgs/Recognize/projects/10/views/5",
@@ -225,6 +242,63 @@ term = T.render(buckets, config: config, generated_at: TODAY)
 ok "terminal shows stale handoff suffix",
    term.include?("business days since you handed off")
 ok "terminal lists reviews-owed item", term.include?("#101 Review me")
+
+# =============================================================================
+# Network errors + spinner (CLI robustness)
+# =============================================================================
+
+# 16. GitHub::Error is a clean, catchable failure type.
+ok "#16a GitHub::Error < StandardError", Kamandar::GitHub::Error.ancestors.include?(StandardError)
+ok "#16b NETWORK_ERRORS covers connect timeout",
+   Kamandar::GitHub::NETWORK_ERRORS.include?(Net::OpenTimeout)
+
+# 17. with_spinner: on a non-tty stderr (pipe/cron) it just yields, returns the
+#     block value, and writes nothing to stderr — keeping captured output clean.
+def without_tty
+  old = $stderr
+  $stderr = StringIO.new
+  [yield, $stderr.string]
+ensure
+  $stderr = old
+end
+
+val, noise = without_tty { Kamandar::CLI.with_spinner("loading") { 7 * 6 } }
+check "#17a with_spinner returns block value (non-tty)", val, 42
+ok "#17b with_spinner writes nothing on non-tty", noise.empty?
+
+# 18b. with_retries: succeeds after transient failures, no sleeping in tests.
+calls = 0
+res = Kamandar::GitHub.with_retries(max: 2, backoff: 0) do
+  calls += 1
+  raise SocketError, "blip" if calls < 3
+  "ok"
+end
+check "#18b1 with_retries returns after recovering", res, "ok"
+check "#18b2 with_retries used all attempts", calls, 3
+
+# 18c. with_retries re-raises once attempts are exhausted.
+tries = 0
+exhausted = begin
+  Kamandar::GitHub.with_retries(max: 1, backoff: 0) do
+    tries += 1
+    raise SocketError, "down"
+  end
+rescue SocketError => e
+  e.message
+end
+check "#18c1 with_retries re-raises after exhaustion", exhausted, "down"
+check "#18c2 with_retries attempted max+1 times", tries, 2
+
+# 18. with_spinner propagates exceptions raised inside the block.
+raised = nil
+without_tty do
+  begin
+    Kamandar::CLI.with_spinner("loading") { raise Kamandar::GitHub::Error, "boom" }
+  rescue Kamandar::GitHub::Error => e
+    raised = e.message
+  end
+end
+check "#18 with_spinner re-raises block error", raised, "boom"
 
 # =============================================================================
 puts "=" * 50

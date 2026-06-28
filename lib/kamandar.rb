@@ -50,7 +50,9 @@
 #   OUTPUT / --browser,-b (terminal) surface: terminal | browser; flag forces
 #                                     browser and overrides OUTPUT
 #   WATCH_SECONDS / --watch N  (0)    browser only: re-fetch + rewrite every N s
-#   PROJECT_URL           (for #3)    board/view URL; org + project number read
+#   PROJECT_URL           (for #3)    board/view URL; org + project number read.
+#                                     When set, PR buckets are also scoped to
+#                                     that org (else account-wide).
 #   NOT_STARTED_STATUSES  (Todo,Backlog,No Status)  case-insensitive status set
 #   ITERATION_FILTER      (off)       `current` restricts #3 to the active sprint
 #   ITERATION_FIELD       (Iteration) board's iteration field name
@@ -99,6 +101,7 @@
 # =============================================================================
 
 require "net/http"
+require "openssl"
 require "json"
 require "date"
 require "time"
@@ -308,12 +311,20 @@ module Kamandar
 
     # -- search strings -------------------------------------------------------
 
-    def reviews_owed_query(login)
-      "is:open is:pr review-requested:#{login} archived:false"
+    # When `org` is given (derived from PROJECT_URL), the search is scoped to
+    # that org so PR buckets match the project's domain instead of the whole
+    # account.
+    def reviews_owed_query(login, org: nil)
+      scoped("is:open is:pr review-requested:#{login}", org)
     end
 
-    def my_prs_query(login)
-      "is:open is:pr author:#{login} archived:false"
+    def my_prs_query(login, org: nil)
+      scoped("is:open is:pr author:#{login}", org)
+    end
+
+    def scoped(base, org)
+      base += " org:#{org}" if org && !org.to_s.empty?
+      "#{base} archived:false"
     end
 
     # -- GraphQL builders -----------------------------------------------------
@@ -685,12 +696,54 @@ module Kamandar
   # GitHub — the only network layer.
   # ---------------------------------------------------------------------------
   module GitHub
+    # Raised for any GitHub-side failure (network, HTTP, GraphQL). CLI catches
+    # this and prints a clean one-line message instead of a raw stack trace.
+    class Error < StandardError; end
+
+    OPEN_TIMEOUT = 8  # seconds to establish the TCP/TLS connection
+    READ_TIMEOUT = 20 # seconds to wait for the response
+    MAX_RETRIES  = 2  # extra attempts after the first, on transient blips
+    RETRY_BACKOFF = 1.0 # base seconds; waits backoff*1, backoff*2, ...
+
+    # Connection-level failures we want to surface as a friendly Error rather
+    # than a raw stack trace. Also the set we retry on — a flapping route often
+    # recovers within seconds.
+    NETWORK_ERRORS = [
+      Net::OpenTimeout, Net::ReadTimeout, SocketError, OpenSSL::SSL::SSLError,
+      Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH
+    ].freeze
+
     module_function
 
+    # Run `block`, retrying up to `max` times on a transient network error with
+    # linear backoff. Re-raises the last error once attempts are exhausted.
+    # `backoff: 0` disables sleeping (used by tests).
+    def with_retries(max: MAX_RETRIES, backoff: RETRY_BACKOFF)
+      attempt = 0
+      begin
+        yield
+      rescue *NETWORK_ERRORS
+        attempt += 1
+        raise if attempt > max
+        sleep(backoff * attempt) if backoff.positive?
+        retry
+      end
+    end
+
     def graphql(query, variables, token)
+      with_retries { request_graphql(query, variables, token) }
+    rescue *NETWORK_ERRORS => e
+      raise Error, "could not reach GitHub (#{e.class}: #{e.message}) after #{MAX_RETRIES + 1} attempts. Check your connection and try again."
+    end
+
+    # One GraphQL round-trip. Raises raw NETWORK_ERRORS (so with_retries can act)
+    # and a GitHub::Error for GraphQL/HTTP-level failures (not retried).
+    def request_graphql(query, variables, token)
       uri = URI(GRAPHQL_ENDPOINT)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = true
+      http.open_timeout = OPEN_TIMEOUT
+      http.read_timeout = READ_TIMEOUT
       req = Net::HTTP::Post.new(uri)
       req["Authorization"] = "Bearer #{token}"
       req["Content-Type"] = "application/json"
@@ -700,20 +753,21 @@ module Kamandar
       res = http.request(req)
       body = JSON.parse(res.body)
       if body["errors"] && !body["errors"].empty?
-        raise "GraphQL error: #{body['errors'].map { |e| e['message'] }.join('; ')}"
+        raise Error, "GraphQL error: #{body['errors'].map { |e| e['message'] }.join('; ')}"
       end
       unless res.is_a?(Net::HTTPSuccess)
-        raise "HTTP #{res.code}: #{res.body}"
+        raise Error, "HTTP #{res.code}: #{res.body}"
       end
       body["data"]
     end
 
     # Run both PR searches in one call. Returns [owed_nodes, mine_nodes].
-    def fetch_prs(login, token)
+    # `org` (optional) scopes both searches to a single organization.
+    def fetch_prs(login, token, org: nil)
       data = graphql(
         Engine.build_pr_query,
-        { "owed" => Engine.reviews_owed_query(login),
-          "mine" => Engine.my_prs_query(login) },
+        { "owed" => Engine.reviews_owed_query(login, org: org),
+          "mine" => Engine.my_prs_query(login, org: org) },
         token
       )
       owed = (data.dig("owed", "nodes") || []).reject(&:empty?)
@@ -807,6 +861,8 @@ module Kamandar
   module CLI
     module_function
 
+    SPINNER_FRAMES = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
+
     def run(env: ENV, argv: ARGV)
       config = Config.from(env: env, argv: argv)
       validate!(config)
@@ -819,7 +875,7 @@ module Kamandar
       if surface == :browser && config[:watch_seconds].to_i > 0
         run_watch(config)
       elsif surface == :browser
-        buckets = fetch_and_classify(config)
+        buckets = with_spinner("Fetching your GitHub queue…") { fetch_and_classify(config) }
         html = BrowserSurface.render(buckets, config: config,
                                               generated_at: Time.now,
                                               watch_seconds: 0)
@@ -827,43 +883,83 @@ module Kamandar
         $stderr.puts "kamandar: wrote #{path}"
         warn_no_project(config)
       else
-        buckets = fetch_and_classify(config)
+        buckets = with_spinner("Fetching your GitHub queue…") { fetch_and_classify(config) }
         output = TerminalSurface.render(buckets, config: config, generated_at: Time.now)
         TerminalSurface.emit(output)
         warn_no_project(config)
       end
+    rescue GitHub::Error => e
+      $stderr.puts "kamandar: #{e.message}"
+      exit 1
     end
 
     def run_watch(config)
       first = true
       loop do
-        buckets = fetch_and_classify(config)
-        html = BrowserSurface.render(buckets, config: config,
-                                              generated_at: Time.now,
-                                              watch_seconds: config[:watch_seconds])
-        path = BrowserSurface.emit(html, open: first)
-        $stderr.puts "kamandar: refreshed #{path} (#{Time.now.strftime('%H:%M:%S')})"
-        first = false
+        begin
+          buckets = fetch_and_classify(config)
+          html = BrowserSurface.render(buckets, config: config,
+                                                generated_at: Time.now,
+                                                watch_seconds: config[:watch_seconds])
+          path = BrowserSurface.emit(html, open: first)
+          $stderr.puts "kamandar: refreshed #{path} (#{Time.now.strftime('%H:%M:%S')})"
+          first = false
+        rescue GitHub::Error => e
+          # A transient blip shouldn't kill a long-running watch; retry next tick.
+          $stderr.puts "kamandar: #{e.message} — retrying in #{config[:watch_seconds]}s"
+        end
         sleep config[:watch_seconds]
       end
     rescue Interrupt
       $stderr.puts "\nkamandar: watch stopped."
     end
 
+    # Run `block` while animating a spinner on stderr. Only animates on an
+    # interactive terminal — when stderr is piped/redirected (cron, `| mail`)
+    # it just yields, keeping captured output clean. The spinner never touches
+    # stdout, so the rendered report stays pipe-safe. Exceptions raised inside
+    # the block propagate after the line is cleared.
+    def with_spinner(label)
+      return yield unless $stderr.tty?
+
+      result = nil
+      error = nil
+      worker = Thread.new do
+        result = yield
+      rescue Exception => e # rubocop:disable Lint/RescueException
+        error = e
+      end
+
+      i = 0
+      while worker.alive?
+        $stderr.print "\r#{SPINNER_FRAMES[i % SPINNER_FRAMES.length]} #{label}"
+        $stderr.flush
+        sleep 0.08
+        i += 1
+      end
+      worker.join
+      $stderr.print "\r\e[2K" # clear the spinner line
+      $stderr.flush
+
+      raise error if error
+      result
+    end
+
     # Fetch everything, then classify once. The buckets feed whichever surface.
     def fetch_and_classify(config)
-      owed, mine = GitHub.fetch_prs(config[:login], config[:token])
+      # When PROJECT_URL is set, scope the PR searches to that project's org.
+      parsed = config[:project_url] ? Engine.parse_project_url(config[:project_url]) : nil
+      org = parsed && parsed[:org]
+
+      owed, mine = GitHub.fetch_prs(config[:login], config[:token], org: org)
 
       project_items = []
       iterations = nil
-      if config[:project_url]
-        parsed = Engine.parse_project_url(config[:project_url])
-        if parsed
-          project_items, iterations = GitHub.fetch_board(
-            parsed[:org], parsed[:num], config[:token],
-            iteration_field: config[:iteration_field]
-          )
-        end
+      if parsed
+        project_items, iterations = GitHub.fetch_board(
+          parsed[:org], parsed[:num], config[:token],
+          iteration_field: config[:iteration_field]
+        )
       end
 
       Engine.classify(
