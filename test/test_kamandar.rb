@@ -194,20 +194,34 @@ check "qualifier for project is empty (post-filtered)",
 check "scope_label project", E.scope_label({ mode: "project" }), "project"
 check "scope_label repo",    E.scope_label({ mode: "repo", repo: "o/r" }), "repo:o/r"
 
-# -- project repo filtering ---------------------------------------------------
+# -- project board membership (PR items, by url) ------------------------------
+# A board can hold Issue items and PullRequest items; project scope filters PR
+# buckets to the PullRequest items only, matched by url (not by repo — a
+# monorepo would leak PRs from other boards).
+def pr_item(url:)
+  {
+    "fieldValues" => { "nodes" => [] },
+    "content" => { "__typename" => "PullRequest", "url" => url,
+                   "repository" => { "nameWithOwner" => "o/r" } }
+  }
+end
+
 board_items = [
-  item(login: "me", status: "Todo", number: 1),
-  item(login: "me", status: "Backlog", number: 2)
+  item(login: "me", status: "Todo", number: 1),                 # Issue item, ignored
+  pr_item(url: "https://github.com/o/r/pull/5"),                 # PR on the board
+  pr_item(url: "https://github.com/o/r/pull/9")                  # PR on the board
 ]
-check "project_repos collects distinct board repos",
-      E.project_repos(board_items), ["o/r"]
+check "project_pr_urls collects only PullRequest items",
+      E.project_pr_urls(board_items),
+      ["https://github.com/o/r/pull/5", "https://github.com/o/r/pull/9"]
 
 prs_for_filter = [
-  pr(number: 1, repo: "o/r", created: D.(2026, 6, 18)),
-  pr(number: 2, repo: "other/x", created: D.(2026, 6, 18))
+  pr(number: 5, repo: "o/r", url: "https://github.com/o/r/pull/5", created: D.(2026, 6, 18)),
+  pr(number: 7, repo: "o/r", url: "https://github.com/o/r/pull/7", created: D.(2026, 6, 18))
 ]
-check "filter_prs_by_repos keeps only board repos (case-insensitive)",
-      E.filter_prs_by_repos(prs_for_filter, ["O/R"]).map { |p| p["number"] }, [1]
+check "filter_prs_by_urls keeps only PRs on the board",
+      E.filter_prs_by_urls(prs_for_filter, E.project_pr_urls(board_items)).map { |p| p["number"] },
+      [5]
 
 # -- Config wires scope from env + --scope flag -------------------------------
 cfg_default = Kamandar::Config.from(env: {}, argv: [])

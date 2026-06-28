@@ -57,8 +57,8 @@
 #                                       org[:NAME]        one org; bare `org`
 #                                                         reuses PROJECT_URL's org
 #                                       repo:owner/name   one repo
-#                                       project           repos on the PROJECT_URL
-#                                                         board (needs PROJECT_URL)
+#                                       project           PRs that are items on
+#                                                         the PROJECT_URL board
 #                                     If unset and run in an interactive terminal,
 #                                     you're prompted to pick a mode (Enter =
 #                                     global). Skipped for pipes/cron/browser.
@@ -366,15 +366,20 @@ module Kamandar
       end
     end
 
-    # Distinct repos (owner/name) referenced by board items' issue content.
-    def project_repos(items)
-      items.filter_map { |it| it.dig("content", "repository", "nameWithOwner") }.uniq
+    # URLs of the PRs that are actually items on the board. This is the precise
+    # membership test for project scope — filtering by repo would also catch
+    # PRs in the same repo that belong to other boards (e.g. a monorepo).
+    def project_pr_urls(items)
+      items.filter_map do |it|
+        content = it["content"]
+        content && content["__typename"] == "PullRequest" ? content["url"] : nil
+      end.uniq
     end
 
-    # Keep only PR nodes whose repository is in `repos` (case-insensitive).
-    def filter_prs_by_repos(prs, repos)
-      set = repos.map { |r| r.to_s.downcase }
-      prs.select { |pr| set.include?(pr.dig("repository", "nameWithOwner").to_s.downcase) }
+    # Keep only PR nodes whose url is one of `urls` (i.e. on the board).
+    def filter_prs_by_urls(prs, urls)
+      set = urls.compact
+      prs.select { |pr| set.include?(pr["url"]) }
     end
 
     # -- search strings -------------------------------------------------------
@@ -472,6 +477,11 @@ module Kamandar
                       url
                       state
                       assignees(first: 10) { nodes { login } }
+                      repository { nameWithOwner }
+                    }
+                    ... on PullRequest {
+                      number
+                      url
                       repository { nameWithOwner }
                     }
                   }
@@ -1053,7 +1063,7 @@ module Kamandar
       out.puts "  1) global   — account-wide (default)"
       out.puts "  2) org      — a single organization"
       out.puts "  3) repo     — a single repository"
-      out.puts "  4) project  — repos on a GitHub project board"
+      out.puts "  4) project  — PRs that are items on a GitHub project board"
       out.print "Select 1-4 (Enter = global): "
 
       project_url = config[:project_url]
@@ -1136,12 +1146,12 @@ module Kamandar
         )
       end
 
-      # project scope filters PR buckets to the repos present on the board.
+      # project scope filters PR buckets to the PRs that are items on the board.
       if scope[:mode] == "project"
         if parsed
-          repos = Engine.project_repos(project_items)
-          owed = Engine.filter_prs_by_repos(owed, repos)
-          mine = Engine.filter_prs_by_repos(mine, repos)
+          urls = Engine.project_pr_urls(project_items)
+          owed = Engine.filter_prs_by_urls(owed, urls)
+          mine = Engine.filter_prs_by_urls(mine, urls)
         else
           $stderr.puts "kamandar: SCOPE=project needs PROJECT_URL — showing account-wide PRs."
         end

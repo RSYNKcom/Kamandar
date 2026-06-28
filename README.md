@@ -139,7 +139,7 @@ By default Kamandar shows your PR buckets **account-wide**. Narrow them with
 | `global` *(default)* | Every repo your account touches |
 | `org` or `org:NAME` | One org. Bare `org` reuses the org from `PROJECT_URL` |
 | `repo:owner/name` | A single repo |
-| `project` | Only the repos that appear on the `PROJECT_URL` board |
+| `project` | Only the PRs that are **items on** the `PROJECT_URL` board |
 
 ```sh
 ruby lib/kamandar.rb --scope org:Recognize     # one org
@@ -147,8 +147,9 @@ ruby lib/kamandar.rb --scope repo:acme/api     # one repo
 SCOPE=project ruby lib/kamandar.rb             # repos on your project board
 ```
 
-`org`/`repo` filter server-side via a GitHub search qualifier; `project` filters
-the results to the board's repos after the board is fetched. Anything
+`org`/`repo` filter server-side via a GitHub search qualifier; `project` keeps
+only the PRs that are actually **items on the board** (matched by URL, so a
+monorepo doesn't leak PRs that live on other boards). Anything
 unrecognized (or `org`/`repo` with no value, or `project` with no `PROJECT_URL`)
 safely falls back to `global`. Bucket #3 (assigned issues) always comes from
 `PROJECT_URL` and is unaffected by `SCOPE`. The active scope is shown in the
@@ -163,7 +164,7 @@ Scope for PR buckets:
   1) global   — account-wide (default)
   2) org      — a single organization
   3) repo     — a single repository
-  4) project  — repos on a GitHub project board
+  4) project  — PRs that are items on a GitHub project board
 Select 1-4 (Enter = global):
 ```
 
