@@ -169,6 +169,13 @@ in_rev = E.assigned_in_review(review_items, login: "me",
 check "in_review keeps mine + review status (case-insensitive)",
       in_rev.map { |i| i["content"]["number"] }.sort, [10, 13]
 
+# --statuses diagnostic: every issue assigned to me, with its raw Status
+breakdown = E.assigned_status_breakdown(review_items, login: "me")
+check "status breakdown lists only my issues",
+      breakdown.map { |r| r[:number] }.sort, [10, 11, 13]
+check "status breakdown carries the raw Status label",
+      breakdown.find { |r| r[:number] == 10 }[:status], "In Review"
+
 # =============================================================================
 # Search query scoping
 # =============================================================================

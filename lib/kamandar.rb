@@ -44,6 +44,8 @@
 #        ruby lib/kamandar.rb              # terminal output (default)
 #        ruby lib/kamandar.rb --browser    # render + open a static HTML page
 #        ruby lib/kamandar.rb -b --watch 60  # live tab, refreshed every 60s
+#        ruby lib/kamandar.rb --statuses   # list a board's Status labels (to
+#                                          # configure NOT_STARTED/REVIEW_STATUSES)
 #
 # -----------------------------------------------------------------------------
 # CONFIGURATION (CLI flags take precedence over env vars)
@@ -305,6 +307,22 @@ module Kamandar
     # submitted for review on the board.
     def assigned_in_review(items, login:, review_statuses:, **opts)
       assigned_with_status(items, login: login, statuses: review_statuses, **opts)
+    end
+
+    # Diagnostic: every board issue assigned to `login`, with its raw Status.
+    # Used by `--statuses` to reveal the exact labels a board uses so the
+    # NOT_STARTED_STATUSES / REVIEW_STATUSES sets can be configured to match.
+    def assigned_status_breakdown(items, login:)
+      items.filter_map do |item|
+        content = item["content"]
+        next unless content && content["__typename"] == "Issue"
+
+        assignees = (content.dig("assignees", "nodes") || []).map { |a| a["login"] }
+        next unless assignees.include?(login)
+
+        { number: content["number"], title: content["title"],
+          status: single_select_fields(item)["Status"] }
+      end
     end
 
     # -- current-sprint filter (§6) -------------------------------------------
@@ -984,6 +1002,7 @@ module Kamandar
         day_mode: (env["DAY_MODE"] || "business"),
         output_env: (env["OUTPUT"] || "terminal"),
         browser_flag: flags[:browser],
+        list_statuses: flags[:statuses] || false,
         watch_seconds: flags.key?(:watch) ? flags[:watch] : (env["WATCH_SECONDS"] || "0").to_i
       }
     end
@@ -1005,6 +1024,8 @@ module Kamandar
           i += 1
         when /\A--scope=(.+)\z/m
           flags[:scope] = Regexp.last_match(1)
+        when "--statuses"
+          flags[:statuses] = true
         end
         i += 1
       end
@@ -1032,6 +1053,8 @@ module Kamandar
       # Terminal + interactive + no scope given: let the user pick one (and a
       # project URL if they choose project and none is set). Browser, cron, and
       # pipes are skipped so nothing ever blocks on stdin.
+      return print_statuses(config) if config[:list_statuses]
+
       if surface == :terminal && !config[:scope_given] && $stdin.tty?
         picked = prompt_scope(config)
         config = config.merge(scope: picked[:scope], project_url: picked[:project_url])
@@ -1077,6 +1100,45 @@ module Kamandar
       end
     rescue Interrupt
       $stderr.puts "\nkamandar: watch stopped."
+    end
+
+    # Diagnostic for --statuses: fetch the board and print each issue assigned
+    # to you with its exact Status, plus the distinct set, so NOT_STARTED_STATUSES
+    # / REVIEW_STATUSES can be configured to match the board's real labels.
+    def print_statuses(config, input: $stdin, out: $stderr)
+      url = config[:project_url].to_s
+      if Engine.parse_project_url(url).nil? && input.tty?
+        out.print "Project URL (e.g. https://github.com/orgs/ORG/projects/N): "
+        url = (input.gets || "").strip
+      end
+      parsed = Engine.parse_project_url(url)
+      unless parsed
+        out.puts "kamandar: --statuses needs a valid org project URL."
+        return
+      end
+
+      items, = with_spinner("Reading the board…") do
+        GitHub.fetch_board(parsed[:org], parsed[:num], config[:token],
+                           iteration_field: config[:iteration_field])
+      end
+      rows = Engine.assigned_status_breakdown(items, login: config[:login])
+
+      if rows.empty?
+        $stdout.puts "No issues on this board are assigned to @#{config[:login]}."
+        return
+      end
+
+      $stdout.puts "Board issues assigned to @#{config[:login]} (status in brackets):"
+      rows.sort_by { |r| r[:status].to_s }.each do |r|
+        $stdout.puts "  [#{r[:status] || 'no status'}] ##{r[:number]} #{r[:title]}"
+      end
+      distinct = rows.map { |r| r[:status] }.compact.uniq.sort
+      $stdout.puts ""
+      $stdout.puts "Distinct statuses: #{distinct.join(', ')}"
+      $stdout.puts "Set NOT_STARTED_STATUSES / REVIEW_STATUSES to the labels you want."
+    rescue GitHub::Error => e
+      $stderr.puts "kamandar: #{e.message}"
+      exit 1
     end
 
     # Interactive scope picker. The user SELECTS a mode by number (they never

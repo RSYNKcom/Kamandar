@@ -13,7 +13,7 @@ quiet — in your terminal or a self-contained browser page.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-79%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-81%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -96,7 +96,7 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + both surfaces (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 79 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 81 cases
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -128,6 +128,12 @@ Kamandar/
 Only the **org** and **project number** are parsed from `PROJECT_URL` (via
 `/orgs/<org>/projects/<num>`); the saved-view number is ignored — see
 [Non-goals](#-non-goals--known-limitations).
+
+> **Finding your board's labels.** `NOT_STARTED_STATUSES` / `REVIEW_STATUSES`
+> must match your board's actual **Status** column names. Run
+> `ruby lib/kamandar.rb --statuses` to print every issue assigned to you with
+> its exact Status (and the distinct set), then set the two vars to suit. It
+> asks for the board URL if `PROJECT_URL` isn't set.
 
 ---
 
@@ -282,7 +288,7 @@ and fabricated fixtures — **zero network**.
 ```sh
 ruby test/test_kamandar.rb
 # ...
-# 79 passed, 0 failed
+# 81 passed, 0 failed
 ```
 
 ---
