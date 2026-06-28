@@ -160,18 +160,72 @@ check "#3 project filter keeps mine+Todo and mine+Backlog",
 # =============================================================================
 # Search query scoping
 # =============================================================================
-check "owed query is account-wide without org",
+check "owed query is account-wide without qualifier",
       E.reviews_owed_query("me"),
       "is:open is:pr review-requested:me archived:false"
-check "owed query scoped to org when given",
-      E.reviews_owed_query("me", org: "Recognize"),
+check "owed query takes an org qualifier",
+      E.reviews_owed_query("me", qualifier: "org:Recognize"),
       "is:open is:pr review-requested:me org:Recognize archived:false"
-check "mine query scoped to org when given",
-      E.my_prs_query("me", org: "Recognize"),
-      "is:open is:pr author:me org:Recognize archived:false"
-check "empty org is treated as no scope",
-      E.my_prs_query("me", org: ""),
+check "mine query takes a repo qualifier",
+      E.my_prs_query("me", qualifier: "repo:o/r"),
+      "is:open is:pr author:me repo:o/r archived:false"
+check "empty qualifier is no scope",
+      E.my_prs_query("me", qualifier: ""),
       "is:open is:pr author:me archived:false"
+
+# -- scope resolution (4 modes) -----------------------------------------------
+check "scope: blank -> global",      E.parse_scope(""),        { mode: "global" }
+check "scope: 'global' -> global",   E.parse_scope("global"),  { mode: "global" }
+check "scope: 'org:Foo' -> org",     E.parse_scope("org:Foo"), { mode: "org", org: "Foo" }
+check "scope: bare 'org' uses project_org",
+      E.parse_scope("org", project_org: "Recognize"), { mode: "org", org: "Recognize" }
+check "scope: bare 'org' with no project_org -> global",
+      E.parse_scope("org"), { mode: "global" }
+check "scope: 'repo:o/r' -> repo",   E.parse_scope("repo:o/r"), { mode: "repo", repo: "o/r" }
+check "scope: 'project' -> project", E.parse_scope("project"),  { mode: "project" }
+check "scope: unknown -> global",    E.parse_scope("bananas"),  { mode: "global" }
+
+check "qualifier for org",  E.search_qualifier({ mode: "org", org: "Foo" }),  "org:Foo"
+check "qualifier for repo", E.search_qualifier({ mode: "repo", repo: "o/r" }), "repo:o/r"
+check "qualifier for global is empty",  E.search_qualifier({ mode: "global" }),  ""
+check "qualifier for project is empty (post-filtered)",
+      E.search_qualifier({ mode: "project" }), ""
+
+check "scope_label project", E.scope_label({ mode: "project" }), "project"
+check "scope_label repo",    E.scope_label({ mode: "repo", repo: "o/r" }), "repo:o/r"
+
+# -- project repo filtering ---------------------------------------------------
+board_items = [
+  item(login: "me", status: "Todo", number: 1),
+  item(login: "me", status: "Backlog", number: 2)
+]
+check "project_repos collects distinct board repos",
+      E.project_repos(board_items), ["o/r"]
+
+prs_for_filter = [
+  pr(number: 1, repo: "o/r", created: D.(2026, 6, 18)),
+  pr(number: 2, repo: "other/x", created: D.(2026, 6, 18))
+]
+check "filter_prs_by_repos keeps only board repos (case-insensitive)",
+      E.filter_prs_by_repos(prs_for_filter, ["O/R"]).map { |p| p["number"] }, [1]
+
+# -- Config wires scope from env + --scope flag -------------------------------
+cfg_default = Kamandar::Config.from(env: {}, argv: [])
+check "config default scope is global", cfg_default[:scope], { mode: "global" }
+
+cfg_env_repo = Kamandar::Config.from(env: { "SCOPE" => "repo:o/r" }, argv: [])
+check "config reads SCOPE env", cfg_env_repo[:scope], { mode: "repo", repo: "o/r" }
+
+cfg_org_from_url = Kamandar::Config.from(
+  env: { "SCOPE" => "org", "PROJECT_URL" => "https://github.com/orgs/Recognize/projects/10/views/5" },
+  argv: []
+)
+check "config 'org' scope derives org from PROJECT_URL",
+      cfg_org_from_url[:scope], { mode: "org", org: "Recognize" }
+
+cfg_flag = Kamandar::Config.from(env: { "SCOPE" => "global" }, argv: ["--scope", "project"])
+check "config --scope flag overrides SCOPE env",
+      cfg_flag[:scope], { mode: "project" }
 
 # =============================================================================
 # URL parse

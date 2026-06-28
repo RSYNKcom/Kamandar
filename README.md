@@ -13,7 +13,7 @@ quiet — in your terminal or a self-contained browser page.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-43%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-63%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -91,7 +91,7 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + both surfaces (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 43 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 63 cases
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -111,7 +111,8 @@ Kamandar/
 | `GH_LOGIN` | ✅ | — | Your GitHub username |
 | `OUTPUT` / `--browser`, `-b` | | `terminal` | Surface: `terminal` or `browser`. The flag forces browser and overrides `OUTPUT`. |
 | `WATCH_SECONDS` / `--watch N` | | `0` (off) | Browser only: re-fetch + rewrite the page every N seconds |
-| `PROJECT_URL` | for #3 | — | Board/view URL, e.g. `https://github.com/orgs/Recognize/projects/10/views/5`. When set, PR buckets (#1, #2, #4, bonus) are also scoped to that **org**; unset = account-wide. |
+| `PROJECT_URL` | for #3 | — | Board/view URL, e.g. `https://github.com/orgs/Recognize/projects/10/views/5` |
+| `SCOPE` / `--scope` | | `global` | Scope for PR buckets (#1, #2, #4, bonus). One of `global`, `org[:NAME]`, `repo:owner/name`, `project`. See [Scope](#-scope). |
 | `NOT_STARTED_STATUSES` | | `Todo,Backlog,No Status` | Status names treated as "not started" (case-insensitive) |
 | `ITERATION_FILTER` | | `off` | `current` restricts #3 to the active sprint |
 | `ITERATION_FIELD` | | `Iteration` | Board's iteration field name |
@@ -121,6 +122,33 @@ Kamandar/
 Only the **org** and **project number** are parsed from `PROJECT_URL` (via
 `/orgs/<org>/projects/<num>`); the saved-view number is ignored — see
 [Non-goals](#-non-goals--known-limitations).
+
+---
+
+## 🎯 Scope
+
+By default Kamandar shows your PR buckets **account-wide**. Narrow them with
+`SCOPE` (env) or `--scope` (flag; the flag wins):
+
+| `SCOPE` | What PR buckets (#1, #2, #4, bonus) show |
+|---|---|
+| `global` *(default)* | Every repo your account touches |
+| `org` or `org:NAME` | One org. Bare `org` reuses the org from `PROJECT_URL` |
+| `repo:owner/name` | A single repo |
+| `project` | Only the repos that appear on the `PROJECT_URL` board |
+
+```sh
+ruby lib/kamandar.rb --scope org:Recognize     # one org
+ruby lib/kamandar.rb --scope repo:acme/api     # one repo
+SCOPE=project ruby lib/kamandar.rb             # repos on your project board
+```
+
+`org`/`repo` filter server-side via a GitHub search qualifier; `project` filters
+the results to the board's repos after the board is fetched. Anything
+unrecognized (or `org`/`repo` with no value, or `project` with no `PROJECT_URL`)
+safely falls back to `global`. Bucket #3 (assigned issues) always comes from
+`PROJECT_URL` and is unaffected by `SCOPE`. The active scope is shown in the
+terminal header and the browser page.
 
 ---
 
@@ -228,7 +256,7 @@ and fabricated fixtures — **zero network**.
 ```sh
 ruby test/test_kamandar.rb
 # ...
-# 43 passed, 0 failed
+# 63 passed, 0 failed
 ```
 
 ---
