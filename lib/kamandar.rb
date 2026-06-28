@@ -99,6 +99,7 @@
 # =============================================================================
 
 require "net/http"
+require "openssl"
 require "json"
 require "date"
 require "time"
@@ -685,12 +686,28 @@ module Kamandar
   # GitHub — the only network layer.
   # ---------------------------------------------------------------------------
   module GitHub
+    # Raised for any GitHub-side failure (network, HTTP, GraphQL). CLI catches
+    # this and prints a clean one-line message instead of a raw stack trace.
+    class Error < StandardError; end
+
+    OPEN_TIMEOUT = 10 # seconds to establish the TCP/TLS connection
+    READ_TIMEOUT = 20 # seconds to wait for the response
+
+    # Connection-level failures we want to surface as a friendly Error rather
+    # than a raw stack trace.
+    NETWORK_ERRORS = [
+      Net::OpenTimeout, Net::ReadTimeout, SocketError, OpenSSL::SSL::SSLError,
+      Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::EHOSTUNREACH, Errno::ENETUNREACH
+    ].freeze
+
     module_function
 
     def graphql(query, variables, token)
       uri = URI(GRAPHQL_ENDPOINT)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = true
+      http.open_timeout = OPEN_TIMEOUT
+      http.read_timeout = READ_TIMEOUT
       req = Net::HTTP::Post.new(uri)
       req["Authorization"] = "Bearer #{token}"
       req["Content-Type"] = "application/json"
@@ -700,12 +717,14 @@ module Kamandar
       res = http.request(req)
       body = JSON.parse(res.body)
       if body["errors"] && !body["errors"].empty?
-        raise "GraphQL error: #{body['errors'].map { |e| e['message'] }.join('; ')}"
+        raise Error, "GraphQL error: #{body['errors'].map { |e| e['message'] }.join('; ')}"
       end
       unless res.is_a?(Net::HTTPSuccess)
-        raise "HTTP #{res.code}: #{res.body}"
+        raise Error, "HTTP #{res.code}: #{res.body}"
       end
       body["data"]
+    rescue *NETWORK_ERRORS => e
+      raise Error, "could not reach GitHub (#{e.class}: #{e.message}). Check your connection and try again."
     end
 
     # Run both PR searches in one call. Returns [owed_nodes, mine_nodes].
@@ -807,6 +826,8 @@ module Kamandar
   module CLI
     module_function
 
+    SPINNER_FRAMES = %w[⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏].freeze
+
     def run(env: ENV, argv: ARGV)
       config = Config.from(env: env, argv: argv)
       validate!(config)
@@ -819,7 +840,7 @@ module Kamandar
       if surface == :browser && config[:watch_seconds].to_i > 0
         run_watch(config)
       elsif surface == :browser
-        buckets = fetch_and_classify(config)
+        buckets = with_spinner("Fetching your GitHub queue…") { fetch_and_classify(config) }
         html = BrowserSurface.render(buckets, config: config,
                                               generated_at: Time.now,
                                               watch_seconds: 0)
@@ -827,27 +848,66 @@ module Kamandar
         $stderr.puts "kamandar: wrote #{path}"
         warn_no_project(config)
       else
-        buckets = fetch_and_classify(config)
+        buckets = with_spinner("Fetching your GitHub queue…") { fetch_and_classify(config) }
         output = TerminalSurface.render(buckets, config: config, generated_at: Time.now)
         TerminalSurface.emit(output)
         warn_no_project(config)
       end
+    rescue GitHub::Error => e
+      $stderr.puts "kamandar: #{e.message}"
+      exit 1
     end
 
     def run_watch(config)
       first = true
       loop do
-        buckets = fetch_and_classify(config)
-        html = BrowserSurface.render(buckets, config: config,
-                                              generated_at: Time.now,
-                                              watch_seconds: config[:watch_seconds])
-        path = BrowserSurface.emit(html, open: first)
-        $stderr.puts "kamandar: refreshed #{path} (#{Time.now.strftime('%H:%M:%S')})"
-        first = false
+        begin
+          buckets = fetch_and_classify(config)
+          html = BrowserSurface.render(buckets, config: config,
+                                                generated_at: Time.now,
+                                                watch_seconds: config[:watch_seconds])
+          path = BrowserSurface.emit(html, open: first)
+          $stderr.puts "kamandar: refreshed #{path} (#{Time.now.strftime('%H:%M:%S')})"
+          first = false
+        rescue GitHub::Error => e
+          # A transient blip shouldn't kill a long-running watch; retry next tick.
+          $stderr.puts "kamandar: #{e.message} — retrying in #{config[:watch_seconds]}s"
+        end
         sleep config[:watch_seconds]
       end
     rescue Interrupt
       $stderr.puts "\nkamandar: watch stopped."
+    end
+
+    # Run `block` while animating a spinner on stderr. Only animates on an
+    # interactive terminal — when stderr is piped/redirected (cron, `| mail`)
+    # it just yields, keeping captured output clean. The spinner never touches
+    # stdout, so the rendered report stays pipe-safe. Exceptions raised inside
+    # the block propagate after the line is cleared.
+    def with_spinner(label)
+      return yield unless $stderr.tty?
+
+      result = nil
+      error = nil
+      worker = Thread.new do
+        result = yield
+      rescue Exception => e # rubocop:disable Lint/RescueException
+        error = e
+      end
+
+      i = 0
+      while worker.alive?
+        $stderr.print "\r#{SPINNER_FRAMES[i % SPINNER_FRAMES.length]} #{label}"
+        $stderr.flush
+        sleep 0.08
+        i += 1
+      end
+      worker.join
+      $stderr.print "\r\e[2K" # clear the spinner line
+      $stderr.flush
+
+      raise error if error
+      result
     end
 
     # Fetch everything, then classify once. The buckets feed whichever surface.

@@ -13,6 +13,7 @@
 require_relative "../lib/kamandar"
 require "date"
 require "time"
+require "stringio"
 
 E = Kamandar::Engine
 S = Kamandar::Surface
@@ -225,6 +226,40 @@ term = T.render(buckets, config: config, generated_at: TODAY)
 ok "terminal shows stale handoff suffix",
    term.include?("business days since you handed off")
 ok "terminal lists reviews-owed item", term.include?("#101 Review me")
+
+# =============================================================================
+# Network errors + spinner (CLI robustness)
+# =============================================================================
+
+# 16. GitHub::Error is a clean, catchable failure type.
+ok "#16a GitHub::Error < StandardError", Kamandar::GitHub::Error.ancestors.include?(StandardError)
+ok "#16b NETWORK_ERRORS covers connect timeout",
+   Kamandar::GitHub::NETWORK_ERRORS.include?(Net::OpenTimeout)
+
+# 17. with_spinner: on a non-tty stderr (pipe/cron) it just yields, returns the
+#     block value, and writes nothing to stderr — keeping captured output clean.
+def without_tty
+  old = $stderr
+  $stderr = StringIO.new
+  [yield, $stderr.string]
+ensure
+  $stderr = old
+end
+
+val, noise = without_tty { Kamandar::CLI.with_spinner("loading") { 7 * 6 } }
+check "#17a with_spinner returns block value (non-tty)", val, 42
+ok "#17b with_spinner writes nothing on non-tty", noise.empty?
+
+# 18. with_spinner propagates exceptions raised inside the block.
+raised = nil
+without_tty do
+  begin
+    Kamandar::CLI.with_spinner("loading") { raise Kamandar::GitHub::Error, "boom" }
+  rescue Kamandar::GitHub::Error => e
+    raised = e.message
+  end
+end
+check "#18 with_spinner re-raises block error", raised, "boom"
 
 # =============================================================================
 puts "=" * 50
