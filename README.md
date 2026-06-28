@@ -63,8 +63,8 @@ Kamandar for @you  —  2026-06-22 09:14  (business days)
 > Requires **Ruby 3.2+**. No gems — standard library only.
 
 ```sh
-git clone https://github.com/cdrrazan/releaser.git
-cd releaser
+git clone https://github.com/cdrrazan/Kamandar.git
+cd Kamandar
 
 export GITHUB_TOKEN=ghp_xxx          # classic PAT: repo, read:org, read:project
 export GH_LOGIN=your-username
@@ -87,7 +87,7 @@ ln -s "$PWD/lib/kamandar.rb" ~/.local/bin/kamandar
 ## 📂 Project layout
 
 ```text
-releaser/
+Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + both surfaces (single file, stdlib only)
 ├── test/

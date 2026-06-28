@@ -25,8 +25,8 @@ These constraints are the whole point of the project — please preserve them:
 ## Development setup
 
 ```sh
-git clone https://github.com/cdrrazan/releaser.git
-cd releaser
+git clone https://github.com/cdrrazan/Kamandar.git
+cd Kamandar
 ruby -c lib/kamandar.rb   # syntax check
 ruby test/test_kamandar.rb       # run the acceptance tests
 ```
