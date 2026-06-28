@@ -2,7 +2,7 @@
 
 ## Overview
 
-sprint_plate is a single-user, serverless command-line tool. It holds no
+command_center is a single-user, serverless command-line tool. It holds no
 persistent state, runs no server, and exposes no network listener. Its security
 surface is small by design, but it does handle a credential (`GITHUB_TOKEN`),
 so this document describes how that credential is treated and how to report
@@ -30,13 +30,13 @@ This is enforced by an acceptance test (a sentinel token is passed through and
 the rendered HTML is asserted not to contain it). Please keep that test green.
 
 The generated HTML is written to a predictable path
-(`<tmpdir>/sprint_plate.html`) so watch-mode reloads hit the same browser tab.
+(`<tmpdir>/command_center.html`) so watch-mode reloads hit the same browser tab.
 It contains only the same PR/issue titles and URLs you can already see on
 GitHub — no credentials — but be aware it is world-readable depending on your
 `tmpdir` permissions. Delete it if you share the machine:
 
 ```sh
-rm "${TMPDIR:-/tmp}/sprint_plate.html"
+rm "${TMPDIR:-/tmp}/command_center.html"
 ```
 
 ## Network
