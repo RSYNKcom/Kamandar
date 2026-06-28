@@ -991,10 +991,12 @@ module Kamandar
         browser_flag: config[:browser_flag]
       )
 
-      # Terminal + interactive + no scope given: let the user pick one. Browser,
-      # cron, and pipes are skipped so nothing ever blocks on stdin.
+      # Terminal + interactive + no scope given: let the user pick one (and a
+      # project URL if they choose project and none is set). Browser, cron, and
+      # pipes are skipped so nothing ever blocks on stdin.
       if surface == :terminal && !config[:scope_given] && $stdin.tty?
-        config = config.merge(scope: prompt_scope(config))
+        picked = prompt_scope(config)
+        config = config.merge(scope: picked[:scope], project_url: picked[:project_url])
       end
 
       if surface == :browser && config[:watch_seconds].to_i > 0
@@ -1040,35 +1042,48 @@ module Kamandar
     end
 
     # Interactive scope picker. The user SELECTS a mode by number (they never
-    # type the mode itself) and only enters a name for org/repo. Prompts go to
-    # stderr so a piped report on stdout stays clean. Anything blank/invalid —
-    # or project with no PROJECT_URL — resolves to global. Returns a scope hash.
+    # type the mode itself) and only enters a name for org/repo, or a board URL
+    # for project. Prompts go to stderr so a piped report on stdout stays clean.
+    # Anything blank/invalid resolves to global. Returns
+    # { scope:, project_url: } — project_url may be the value the user just
+    # entered (for project scope) or the one already in config.
     def prompt_scope(config, input: $stdin, out: $stderr)
       out.puts "Scope for PR buckets:"
       out.puts "  1) global   — account-wide (default)"
       out.puts "  2) org      — a single organization"
       out.puts "  3) repo     — a single repository"
-      out.puts "  4) project  — repos on your PROJECT_URL board"
+      out.puts "  4) project  — repos on a GitHub project board"
       out.print "Select 1-4 (Enter = global): "
-      case (input.gets || "").strip
-      when "2"
-        out.print "Org name: "
-        name = (input.gets || "").strip
-        name.empty? ? { mode: "global" } : { mode: "org", org: name }
-      when "3"
-        out.print "Repo (owner/name): "
-        name = (input.gets || "").strip
-        name.empty? ? { mode: "global" } : { mode: "repo", repo: name }
-      when "4"
-        if config[:project_url].to_s.strip.empty?
-          out.puts "kamandar: project scope needs PROJECT_URL — using global."
-          { mode: "global" }
+
+      project_url = config[:project_url]
+      scope =
+        case (input.gets || "").strip
+        when "2"
+          out.print "Org name: "
+          name = (input.gets || "").strip
+          name.empty? ? { mode: "global" } : { mode: "org", org: name }
+        when "3"
+          out.print "Repo (owner/name): "
+          name = (input.gets || "").strip
+          name.empty? ? { mode: "global" } : { mode: "repo", repo: name }
+        when "4"
+          entered = config[:project_url].to_s.strip
+          if entered.empty?
+            out.print "Project URL (e.g. https://github.com/orgs/ORG/projects/N): "
+            entered = (input.gets || "").strip
+          end
+          if Engine.parse_project_url(entered)
+            project_url = entered
+            { mode: "project" }
+          else
+            out.puts "kamandar: not a valid org project URL — using global."
+            { mode: "global" }
+          end
         else
-          { mode: "project" }
+          { mode: "global" }
         end
-      else
-        { mode: "global" }
-      end
+
+      { scope: scope, project_url: project_url }
     end
 
     # Run `block` while animating a spinner on stderr. Only animates on an

@@ -237,25 +237,33 @@ check "scope_given true when --scope flag set",
 
 # -- interactive scope picker -------------------------------------------------
 # Feeds canned stdin; captures the prompt on a StringIO so nothing hits stderr.
+# Returns [{scope:, project_url:}, prompt_text].
 def pick(keystrokes, project_url: nil)
   out = StringIO.new
-  scope = Kamandar::CLI.prompt_scope({ project_url: project_url },
-                                     input: StringIO.new(keystrokes), out: out)
-  [scope, out.string]
+  res = Kamandar::CLI.prompt_scope({ project_url: project_url },
+                                   input: StringIO.new(keystrokes), out: out)
+  [res, out.string]
 end
 
-check "picker: Enter -> global",        pick("\n").first,            { mode: "global" }
-check "picker: '1' -> global",          pick("1\n").first,           { mode: "global" }
-check "picker: '2' + name -> org",      pick("2\nRecognize\n").first, { mode: "org", org: "Recognize" }
-check "picker: '2' + blank -> global",  pick("2\n\n").first,         { mode: "global" }
-check "picker: '3' + name -> repo",     pick("3\nacme/api\n").first, { mode: "repo", repo: "acme/api" }
-check "picker: '4' with PROJECT_URL -> project",
-      pick("4\n", project_url: "https://github.com/orgs/Recognize/projects/10").first, { mode: "project" }
-check "picker: '4' without PROJECT_URL -> global",
-      pick("4\n").first, { mode: "global" }
-check "picker: garbage -> global",      pick("xyz\n").first,         { mode: "global" }
+check "picker: Enter -> global",        pick("\n").first[:scope],            { mode: "global" }
+check "picker: '1' -> global",          pick("1\n").first[:scope],           { mode: "global" }
+check "picker: '2' + name -> org",      pick("2\nRecognize\n").first[:scope], { mode: "org", org: "Recognize" }
+check "picker: '2' + blank -> global",  pick("2\n\n").first[:scope],         { mode: "global" }
+check "picker: '3' + name -> repo",     pick("3\nacme/api\n").first[:scope], { mode: "repo", repo: "acme/api" }
+check "picker: '4' with PROJECT_URL set -> project",
+      pick("4\n", project_url: "https://github.com/orgs/Recognize/projects/10").first[:scope], { mode: "project" }
 
-picked, prompt_text = pick("1\n")
+# '4' with no PROJECT_URL prompts for one; a valid URL is captured + used.
+res_url, _ = pick("4\nhttps://github.com/orgs/Recognize/projects/10\n")
+check "picker: '4' asks for URL -> project", res_url[:scope], { mode: "project" }
+check "picker: '4' captures entered URL",
+      res_url[:project_url], "https://github.com/orgs/Recognize/projects/10"
+
+check "picker: '4' blank URL -> global",   pick("4\n\n").first[:scope],       { mode: "global" }
+check "picker: '4' bad URL -> global",     pick("4\nnope\n").first[:scope],   { mode: "global" }
+check "picker: garbage -> global",         pick("xyz\n").first[:scope],       { mode: "global" }
+
+_, prompt_text = pick("1\n")
 ok "picker prompt lists all four modes",
    %w[global org repo project].all? { |m| prompt_text.include?(m) }
 

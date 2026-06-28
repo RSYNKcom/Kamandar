@@ -13,7 +13,7 @@ quiet — in your terminal or a self-contained browser page.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-75%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-78%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -91,7 +91,7 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + both surfaces (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 75 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 78 cases
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -159,13 +159,15 @@ Scope for PR buckets:
   1) global   — account-wide (default)
   2) org      — a single organization
   3) repo     — a single repository
-  4) project  — repos on your PROJECT_URL board
+  4) project  — repos on a GitHub project board
 Select 1-4 (Enter = global):
 ```
 
-Press Enter (or pick nothing valid) and it defaults to **global**. The prompt is
-skipped when a scope is already set, when stdin isn't a terminal (cron/pipes),
-or in browser mode — so nothing ever blocks.
+Pick `org`/`repo` and it asks for the name; pick `project` and — if no
+`PROJECT_URL` is set — it asks for the board URL right there (no need to export
+anything first). Press Enter, or give a blank/invalid value, and it defaults to
+**global**. The prompt is skipped when a scope is already set, when stdin isn't a
+terminal (cron/pipes), or in browser mode — so nothing ever blocks.
 
 ---
 
@@ -273,7 +275,7 @@ and fabricated fixtures — **zero network**.
 ```sh
 ruby test/test_kamandar.rb
 # ...
-# 75 passed, 0 failed
+# 78 passed, 0 failed
 ```
 
 ---
