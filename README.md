@@ -135,7 +135,8 @@ vars every shell. You can skip it and provide config three ways (highest wins):
 1. **CLI flags** — e.g. `--scope`, `--port`, `--theme`.
 2. **Shell env** — `export GITHUB_TOKEN=… GH_LOGIN=…` (best for cron).
 3. **Config file** — a flat `KEY=VALUE` file at `~/.config/kamandar/config`
-   (override the path with `$KAMANDAR_CONFIG`). Same names as the env vars:
+   (or `$XDG_CONFIG_HOME/kamandar/config`; `$KAMANDAR_CONFIG` overrides the path
+   entirely). Same names as the env vars:
 
    ```ini
    GITHUB_TOKEN=ghp_xxx
