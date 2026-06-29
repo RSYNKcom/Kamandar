@@ -488,6 +488,31 @@ ok "matrix theme keeps content (after stripping)",
    term_matrix.gsub(/\e\[[0-9;]*m/, "").include?("#101 Review me")
 ok "matrix theme upcases bucket titles", term_matrix.include?("REVIEWS YOU OWE")
 
+# -- terminal layout: number alignment + entry spacing ------------------------
+# A bucket with mixed-width numbers (#10488 vs #8) must left-pad #number so
+# titles start at the same column, and put a blank line between entries.
+layout_buckets = { reviews_owed: [
+  { number: 10488, title: "Wide one", repo: "o/r", url: "https://x/10488" },
+  { number: 8,     title: "Narrow one", repo: "o/r", url: "https://x/8" }
+] }
+layout_cfg = { login: "me", day_mode: "business", scope: { mode: "global" } }
+layout = T.render(layout_buckets, config: layout_cfg, generated_at: TODAY) # plain
+ok "aligns #number column (pads #8 to #10488 width)", layout.include?("  #8     Narrow one")
+ok "wide number is not padded", layout.include?("  #10488 Wide one")
+ok "blank line separates entries", layout.include?("https://x/10488\n\n  #8")
+ok "single spacing only — never a double blank line", !layout.include?("\n\n\n")
+
+# -- terminal color: 256-color palette (legible on light + dark) --------------
+palette_buckets = { reviews_owed: [{ number: 1, title: "t", repo: "o/r", url: "u" }],
+                    stale: [{ number: 2, title: "s", repo: "o/r", url: "u",
+                              days: 303, mode: "business" }] }
+palette = T.render(palette_buckets, config: layout_cfg, generated_at: TODAY, color: true)
+ok "titles use a bold 256-color code (not 16-color bright)", palette.include?("\e[1;38;5;")
+ok "blue accent for reviews_owed", palette.include?("\e[1;38;5;33m")
+ok "stale suffix uses the amber 256-color (was washed-out yellow 33)",
+   palette.include?("\e[38;5;172m")
+ok "no legacy 16-color title codes remain", !palette.include?("\e[1;33m") && !palette.include?("\e[1;36m")
+
 # -- bonus: full-screen dashboard (digital rain + panels) ---------------------
 DASH = Kamandar::DashboardSurface
 

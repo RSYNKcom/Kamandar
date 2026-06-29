@@ -1026,6 +1026,8 @@ module Kamandar
       heads.map { |h| h > rows + 8 ? -rand(0..rows) : h + 1 }
     end
 
+    # Seed one rain head per column at a random row above the top, so the
+    # streams start staggered rather than all falling from row 0 together.
     def init_heads(cols, rows)
       Array.new(cols) { -rand(0...[rows, 1].max) }
     end
@@ -1761,6 +1763,8 @@ module Kamandar
       out.print DashboardSurface::LEAVE_ALT
     end
 
+    # Current terminal size, clamped to a usable minimum; falls back to a sane
+    # 24x80 if the stream has no winsize (e.g. not a real TTY).
     def terminal_size(out)
       r, c = out.winsize
       [[r, 6].max, [c, 24].max]
@@ -1768,12 +1772,16 @@ module Kamandar
       [24, 80]
     end
 
+    # Read a single keypress (raw, unbuffered); nil on EOF or a non-TTY stream,
+    # which the dashboard loop treats as "quit".
     def read_key(input)
       input.getch
     rescue StandardError
       nil
     end
 
+    # Play the digital-rain intro: a fixed number of frames, advancing the heads
+    # one row per frame. Kept separate from run_dashboard so the loop reads clean.
     def rain_splash(out, rows:, cols:, frames: 22, delay: 0.05)
       heads = DashboardSurface.init_heads(cols, rows)
       frames.times do
