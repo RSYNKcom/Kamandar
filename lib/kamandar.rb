@@ -1285,7 +1285,8 @@ module Kamandar
       esc = BrowserSurface.method(:escape)
       meta_list = Engine.bucket_meta(Engine.scope_mode(config))
       total = meta_list.sum { |key, _, _| (buckets[key] || []).size }
-      app = tabbed_html(buckets, meta_list)
+      scope_label = config[:scope] ? Engine.scope_label(config[:scope]) : "global"
+      app = tabbed_html(buckets, meta_list, total: total, scope_label: scope_label)
       tab_rules = tab_css(meta_list.size)
 
       refresh = poll.to_i > 0 ? %(<meta http-equiv="refresh" content="#{poll.to_i}">) : ""
@@ -1315,9 +1316,9 @@ module Kamandar
         <style>#{BrowserSurface.css}#{extra_css}#{tab_rules}</style>
         </head>
         <body>
-        <header>
-          <div class="wrap">
-            <h1><span class="bow">\u{1F3F9}</span> Kamandar</h1>
+        <nav class="topbar">
+          <div class="nav-wrap">
+            <a class="brand" href="/"><span class="bow">\u{1F3F9}</span> <span class="brandname">Kamandar</span></a>
             <div class="meta">
               #{chips}
             </div>
@@ -1330,8 +1331,19 @@ module Kamandar
               <a class="refresh" href="#{esc.call(self_link(mode, name, project_url, poll))}" title="Refresh now">↻</a>
             </form>
           </div>
-        </header>
+        </nav>
         #{app}
+        <footer class="foot">
+          <div class="foot-wrap">
+            <span class="fbrand"><span class="bow">\u{1F3F9}</span> Kamandar v#{VERSION}</span>
+            <span class="dot">·</span>
+            <span>personal GitHub command center</span>
+            <span class="dot">·</span>
+            <span>127.0.0.1 · stdlib-only Ruby</span>
+            <span class="grow"></span>
+            <span>generated #{esc.call(generated_at.strftime('%H:%M:%S'))}</span>
+          </div>
+        </footer>
         </body>
         </html>
       HTML
@@ -1340,7 +1352,7 @@ module Kamandar
     # Build the sidebar + tabbed panels. Pure CSS tabs: one hidden radio per
     # bucket drives which panel shows (`tab_css` generates the per-index rules),
     # so it works with no JavaScript. The first bucket is selected by default.
-    def tabbed_html(buckets, meta_list)
+    def tabbed_html(buckets, meta_list, total: 0, scope_label: "global")
       esc = BrowserSurface.method(:escape)
       radios = []
       navs = []
@@ -1375,7 +1387,14 @@ module Kamandar
       <<~APP
         <div class="app">
         #{radios.join("\n")}
-        <aside class="sidebar"><nav>#{navs.join("\n")}</nav></aside>
+        <aside class="sidebar">
+          <div class="side-head">
+            <span class="side-title">Your queue</span>
+            <span class="chip total">#{total} open</span>
+          </div>
+          <nav>#{navs.join("\n")}</nav>
+          <div class="side-foot">#{esc.call(scope_label)}</div>
+        </aside>
         <main class="panels">#{panels.join("\n")}</main>
         </div>
       APP
@@ -1421,36 +1440,58 @@ module Kamandar
       pairs.empty? ? "/" : "/?#{pairs.join('&')}"
     end
 
-    # A few rules layered on top of BrowserSurface.css for the control bar.
+    # The premium chrome layered on top of BrowserSurface.css: a sticky glass
+    # top nav, the sidebar + tabbed panels, and a footer. Theme variables are
+    # inherited from BrowserSurface.css so it tracks light/dark automatically.
     def extra_css
       <<~CSS
-        body{font-family:"Google Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
-        .app{display:flex;gap:22px;max-width:1040px;margin:0 auto;padding:20px 16px 56px;align-items:flex-start}
+        body{font-family:"Google Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;display:flex;flex-direction:column;min-height:100vh;background:radial-gradient(1100px 380px at 50% -160px,color-mix(in srgb,var(--accent) 12%,transparent),transparent),var(--bg);background-attachment:fixed}
+        /* top nav — frosted glass, sticky */
+        .topbar{position:sticky;top:0;z-index:10;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg) 80%,transparent);backdrop-filter:saturate(1.5) blur(12px);-webkit-backdrop-filter:saturate(1.5) blur(12px)}
+        .nav-wrap{max-width:1040px;margin:0 auto;padding:12px 16px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+        .brand{display:flex;align-items:center;gap:8px;text-decoration:none;font-weight:800;font-size:1.18rem;letter-spacing:-.01em;color:var(--fg)}
+        .brand .bow{font-size:1.2rem}
+        .brandname{background:linear-gradient(90deg,var(--accent),#8250df);-webkit-background-clip:text;background-clip:text;color:transparent}
+        .topbar .meta{margin:0}
+        .topbar .controls{margin:0 0 0 auto}
+        .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+        .controls select,.controls input,.controls button{font:inherit;font-size:.82rem;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:6px 10px}
+        .controls input{min-width:150px}
+        .controls .poll{min-width:70px;width:78px}
+        .controls button{cursor:pointer;font-weight:600;border-color:var(--accent);color:var(--accent);transition:background .1s ease,color .1s ease}
+        .controls button:hover{background:var(--accent);color:#fff}
+        .controls .refresh{text-decoration:none;font-size:1.1rem;line-height:1;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:5px 10px}
+        .controls .refresh:hover{color:var(--accent);border-color:var(--accent)}
+        /* layout: sidebar + main content */
+        .app{flex:1 0 auto;display:flex;gap:24px;width:100%;max-width:1040px;margin:0 auto;padding:24px 16px 48px;align-items:flex-start}
         .tabr{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-        .sidebar{position:sticky;top:96px;flex:none;width:240px}
-        .sidebar nav{display:flex;flex-direction:column;gap:4px}
-        .navitem{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid transparent;border-radius:9px;cursor:pointer;color:var(--fg)}
-        .navitem:hover{background:var(--card)}
+        .sidebar{position:sticky;top:84px;flex:none;width:248px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow)}
+        .side-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 4px 11px;border-bottom:1px solid var(--border)}
+        .side-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+        .sidebar nav{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+        .navitem{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid transparent;border-radius:10px;cursor:pointer;color:var(--fg)}
+        .navitem:hover{background:var(--bg)}
         .navtitle{flex:1 1 auto;min-width:0;font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .navitem .count.z{background:var(--border);color:var(--muted)}
+        .side-foot{margin-top:11px;padding:9px 4px 2px;border-top:1px solid var(--border);font-size:.74rem;color:var(--muted);text-align:center}
         .panels{flex:1 1 auto;min-width:0;margin:0;padding:0;max-width:none}
         .panels .bucket{display:none;margin:0}
-        .tabr:focus-visible+.tabr+*,.navitem:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+        .navitem:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+        /* footer */
+        .foot{flex-shrink:0;border-top:1px solid var(--border);background:var(--card)}
+        .foot-wrap{max-width:1040px;margin:0 auto;padding:18px 16px 28px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;color:var(--muted);font-size:.78rem}
+        .foot .fbrand{display:flex;align-items:center;gap:6px;font-weight:700;color:var(--fg)}
+        .foot .dot{opacity:.45}
+        .foot .grow{flex:1 1 auto}
         @media (max-width:720px){
           .app{flex-direction:column;gap:14px}
           .sidebar{position:static;width:auto}
           .sidebar nav{flex-direction:row;flex-wrap:wrap}
           .navitem{flex:0 0 auto}
           .navtitle{display:none}
+          .side-head,.side-foot{display:none}
+          .topbar .controls{margin:0;width:100%}
         }
-        .controls{margin:12px 0 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-        .controls select,.controls input,.controls button{font:inherit;font-size:.82rem;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:6px 10px}
-        .controls input{min-width:160px}
-        .controls .poll{min-width:70px;width:80px}
-        .controls button{cursor:pointer;font-weight:600;border-color:var(--accent);color:var(--accent)}
-        .controls button:hover{background:var(--accent);color:#fff}
-        .controls .refresh{text-decoration:none;font-size:1.1rem;line-height:1;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:5px 10px}
-        .controls .refresh:hover{color:var(--accent);border-color:var(--accent)}
       CSS
     end
   end

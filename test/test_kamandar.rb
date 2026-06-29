@@ -607,6 +607,13 @@ ok "server page generates tab rules", page.include?("#kt-0:checked~.panels #kp-0
 ok "server page stays script-free", !(page =~ /<script/)
 # tab_css emits one show + one highlight rule per bucket, scaled to the count.
 ok "tab_css scales to bucket count", SURF.tab_css(3).scan("display:block").size == 3
+# premium chrome: top nav, sidebar header, and footer.
+ok "server page has a top nav", page.include?(%(<nav class="topbar">)) &&
+                                page.include?(%(<span class="brandname">Kamandar</span>))
+ok "server page has a sidebar header", page.include?(%(<span class="side-title">Your queue</span>))
+ok "server page has a footer", page.include?(%(<footer class="foot">)) &&
+                               page.include?("Kamandar v#{Kamandar::VERSION}")
+ok "footer shows the generated time", page.include?("generated ")
 
 # error_page: same chrome, no token, still renders a retry link.
 errp = SURF.error_page("boom", config: config.merge(token: SECRET))
