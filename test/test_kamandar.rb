@@ -617,7 +617,10 @@ ok "tab_css scales to bucket count", SURF.tab_css(3).scan("display:block").size 
 # premium chrome: top nav, sidebar header, and footer.
 ok "server page has a top nav", page.include?(%(<nav class="topbar">)) &&
                                 page.include?(%(<span class="brandname">Kamandar</span>))
-ok "server page has a sidebar header", page.include?(%(<span class="side-title">Your queue</span>))
+# sidebar splits into two boxes: reviews (others' work) and your own work.
+ok "sidebar has a Reviews box", page.include?(%(<span class="side-title">Reviews</span>))
+ok "sidebar has a Your work box", page.include?(%(<span class="side-title">Your work</span>))
+ok "sidebar uses two carded boxes", page.scan(%(<section class="sidebox">)).size == 2
 # sidebar tabs use short labels; the full title stays on the panel + tooltip.
 ok "sidebar tab uses a short label", page.include?(%(<span class="navtitle">Reviews</span>))
 ok "navitem keeps full title as tooltip", page.include?(%(title="Reviews you owe"))

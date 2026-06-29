@@ -1388,7 +1388,7 @@ module Kamandar
     def tabbed_html(buckets, meta_list, total: 0, scope_label: "global")
       esc = BrowserSurface.method(:escape)
       radios = []
-      navs = []
+      items = [] # one {key, size, nav} per bucket, in board order
       panels = []
       meta_list.each_with_index do |(key, title, empty), i|
         rows = buckets[key] || []
@@ -1397,10 +1397,11 @@ module Kamandar
         radios << %(<input class="tabr" type="radio" name="kt" id="kt-#{i}"#{checked}>)
         cls = rows.empty? ? "count z" : "count"
         short = SHORT_LABELS[key] || title
-        navs << %(<label class="navitem" for="kt-#{i}" style="--c:#{meta[:color]}" title="#{esc.call(title)}">) +
-                %(<span class="icon">#{meta[:icon]}</span>) +
-                %(<span class="navtitle">#{esc.call(short)}</span>) +
-                %(<span class="#{cls}">#{rows.size}</span></label>)
+        nav = %(<label class="navitem" for="kt-#{i}" style="--c:#{meta[:color]}" title="#{esc.call(title)}">) +
+              %(<span class="icon">#{meta[:icon]}</span>) +
+              %(<span class="navtitle">#{esc.call(short)}</span>) +
+              %(<span class="#{cls}">#{rows.size}</span></label>)
+        items << { key: key, size: rows.size, nav: nav }
         body =
           if rows.empty?
             %(<p class="empty">#{esc.call(empty)}</p>)
@@ -1418,20 +1419,46 @@ module Kamandar
         SECTION
       end
 
+      # Two boxes: reviews you owe on *other people's* work, and *your own*
+      # assigned issues/PRs. REVIEW_KEYS lists the "others' work" buckets.
+      reviews, mine = items.partition { |it| REVIEW_KEYS.include?(it[:key]) }
+      boxes = [
+        sidebox("Reviews", reviews),
+        sidebox("Your work", mine, foot: scope_label)
+      ].join("\n")
+
       <<~APP
         <div class="app">
         #{radios.join("\n")}
-        <aside class="sidebar">
-          <div class="side-head">
-            <span class="side-title">Your queue</span>
-            <span class="chip total">#{total} open</span>
-          </div>
-          <nav>#{navs.join("\n")}</nav>
-          <div class="side-foot">#{esc.call(scope_label)}</div>
-        </aside>
+        <aside class="sidebar">#{boxes}</aside>
         <main class="panels">#{panels.join("\n")}</main>
         </div>
       APP
+    end
+
+    # Buckets that represent *other people's* work (review requested from you),
+    # as opposed to your own assigned issues/PRs. Drives the sidebar split.
+    REVIEW_KEYS = %i[reviews_owed].freeze
+
+    # One carded sidebar group: a header (title + open count) and its tabs.
+    # Skipped entirely if the group has no buckets in the current scope.
+    def sidebox(title, items, foot: nil)
+      return "" if items.empty?
+
+      esc = BrowserSurface.method(:escape)
+      open = items.sum { |it| it[:size] }
+      cls = open.zero? ? "chip total z" : "chip total"
+      footer = foot ? %(<div class="side-foot">#{esc.call(foot)}</div>) : ""
+      <<~BOX.chomp
+        <section class="sidebox">
+          <div class="side-head">
+            <span class="side-title">#{esc.call(title)}</span>
+            <span class="#{cls}">#{open} open</span>
+          </div>
+          <nav>#{items.map { |it| it[:nav] }.join("\n")}</nav>
+          #{footer}
+        </section>
+      BOX
     end
 
     # Per-index tab rules. CSS can't loop, and the bucket count varies by scope
@@ -1521,9 +1548,11 @@ module Kamandar
         /* layout: sidebar + main content */
         .app{flex:1 0 auto;display:flex;gap:24px;width:100%;max-width:70%;margin:0 auto;padding:24px 16px 48px;align-items:flex-start}
         .tabr{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-        .sidebar{position:sticky;top:120px;flex:none;width:248px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow)}
+        .sidebar{position:sticky;top:120px;flex:none;width:248px;display:flex;flex-direction:column;gap:14px}
+        .sidebox{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow)}
         .side-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 4px 11px;border-bottom:1px solid var(--border)}
         .side-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+        .chip.total.z{border-color:var(--border);color:var(--muted)}
         .sidebar nav{display:flex;flex-direction:column;gap:3px;margin-top:8px}
         .navitem{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid transparent;border-radius:10px;cursor:pointer;color:var(--fg)}
         .navitem:hover{background:var(--bg)}
