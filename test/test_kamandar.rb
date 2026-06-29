@@ -630,6 +630,9 @@ ok "panel heading keeps full title", page.include?(%(<span class="htitle">Review
 # each panel explains what its bucket collects.
 ok "panel shows a description", page.include?(%(<p class="desc">)) &&
    page.include?("review was requested from you")
+# empty buckets render a centered empty-state card.
+ok "empty bucket shows an empty-state card", page.include?(%(<div class="emptybox">)) &&
+   page.include?(%(<p class="emptymsg">))
 ok "server page has a footer", page.include?(%(<footer class="foot">)) &&
                                page.include?("Kamandar v#{Kamandar::VERSION}")
 ok "footer shows the generated time", page.include?("generated ")

@@ -1421,7 +1421,12 @@ module Kamandar
         items << { key: key, size: rows.size, nav: nav }
         body =
           if rows.empty?
-            %(<p class="empty">#{esc.call(empty)}</p>)
+            <<~EMPTY.chomp
+              <div class="emptybox">
+                <span class="emptyicon">#{meta[:icon]}</span>
+                <p class="emptymsg">#{esc.call(empty)}</p>
+              </div>
+            EMPTY
           else
             rows.map { |row| BrowserSurface.card(row, key) }.join("\n")
           end
@@ -1586,6 +1591,10 @@ module Kamandar
         .panels{flex:1 1 auto;min-width:0;margin:0;padding:0;max-width:none}
         .panels .bucket{display:none;margin:0}
         .panels .desc{margin:-2px 2px 14px;color:var(--muted);font-size:.86rem;line-height:1.4;max-width:62ch}
+        /* centered empty-state card */
+        .emptybox{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:46vh;border:1px dashed var(--border);border-radius:16px;background:var(--card);box-shadow:var(--shadow);padding:40px 24px;text-align:center}
+        .emptyicon{font-size:2.6rem;line-height:1;opacity:.85;filter:grayscale(.15)}
+        .emptymsg{margin:0;color:var(--muted);font-size:1rem;font-weight:600;max-width:42ch}
         .navitem:focus-within{outline:2px solid var(--accent);outline-offset:2px}
         /* footer */
         .foot{flex-shrink:0;border-top:1px solid var(--border);background:var(--card)}
