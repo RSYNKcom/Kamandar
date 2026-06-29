@@ -1353,9 +1353,10 @@ module Kamandar
               <input class="field f-name" type="text" name="name" value="#{esc.call(name)}" placeholder="org or owner/name">
               <input class="field f-proj" type="text" name="project_url" value="#{esc.call(project_url)}" placeholder="project board URL">
               <label class="field f-poll pollbox" title="Auto-refresh interval — 0 turns it off">
+                <span class="pollicon">↻</span>
                 <span class="polltext">Auto-refresh</span>
                 <input type="number" name="poll" value="#{poll.to_i}" min="0" step="5" aria-label="Auto-refresh seconds">
-                <span class="pollunit">sec</span>
+                <span class="pollunit">s</span>
               </label>
               <button type="submit">Apply</button>
               <a class="refresh" href="#{esc.call(self_link(mode, name, project_url, poll))}" title="Refresh now">↻</a>
@@ -1491,11 +1492,13 @@ module Kamandar
         .controls{max-width:70%;margin:0 auto;padding:10px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
         .controls input,.controls button{font:inherit;font-size:.82rem;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:6px 10px}
         .controls .field{min-width:160px}
-        .controls .pollbox{min-width:0;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;cursor:text}
-        .controls .pollbox .polltext{font-size:.74rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-        .controls .pollbox input{border:none;background:transparent;padding:2px 0;width:42px;text-align:right;min-width:0}
-        .controls .pollbox input:focus{outline:none}
-        .controls .pollbox .pollunit{font-size:.78rem;color:var(--muted)}
+        .controls .pollbox{min-width:0;display:inline-flex;align-items:center;gap:7px;padding:4px 6px 4px 11px;cursor:text;transition:border-color .1s ease}
+        .controls .pollbox:focus-within{border-color:var(--accent)}
+        .controls .pollbox .pollicon{font-size:.92rem;line-height:1;color:var(--accent)}
+        .controls .pollbox .polltext{font-size:.78rem;font-weight:600;color:var(--muted)}
+        .controls .pollbox input{font-variant-numeric:tabular-nums;font-weight:600;color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px 4px;width:48px;text-align:center;min-width:0}
+        .controls .pollbox input:focus{outline:none;border-color:var(--accent)}
+        .controls .pollbox .pollunit{font-size:.78rem;color:var(--muted);padding-right:3px}
         .controls button{cursor:pointer;font-weight:600;border-color:var(--accent);color:var(--accent);transition:background .1s ease,color .1s ease}
         .controls button:hover{background:var(--accent);color:#fff}
         .controls .refresh{text-decoration:none;font-size:1.1rem;line-height:1;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:5px 10px}
