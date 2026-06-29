@@ -169,6 +169,27 @@ in_rev = E.assigned_in_review(review_items, login: "me",
 check "in_review keeps mine + review status (case-insensitive)",
       in_rev.map { |i| i["content"]["number"] }.sort, [10, 13]
 
+# in_qa: issues assigned to me whose Status is in the QA set
+qa_items = [
+  item(login: "me", status: "Ready for QA", number: 20),
+  item(login: "me", status: "In Review", number: 21),
+  item(login: "other", status: "Ready for QA", number: 22)
+]
+in_qa = E.assigned_in_qa(qa_items, login: "me", qa_statuses: ["Ready for QA", "QA"])
+check "in_qa keeps mine + QA status",
+      in_qa.map { |i| i["content"]["number"] }.sort, [20]
+
+# blocked: issues assigned to me whose Status is in the blocked set
+blocked_items = [
+  item(login: "me", status: "Blocked", number: 30),
+  item(login: "me", status: "On Hold", number: 31),
+  item(login: "me", status: "In Progress", number: 32)
+]
+blocked = E.assigned_blocked(blocked_items, login: "me",
+                                            blocked_statuses: ["Blocked", "On Hold"])
+check "blocked keeps mine + blocked status",
+      blocked.map { |i| i["content"]["number"] }.sort, [30, 31]
+
 # --statuses diagnostic: every issue assigned to me, with its raw Status
 breakdown = E.assigned_status_breakdown(review_items, login: "me")
 check "status breakdown lists only my issues",
