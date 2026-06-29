@@ -314,7 +314,16 @@ check "picker: '4' captures entered URL",
       res_url[:project_url], "https://github.com/orgs/Recognize/projects/10"
 
 check "picker: '4' blank URL -> global",   pick("4\n\n").first[:scope],       { mode: "global" }
-check "picker: '4' bad URL -> global",     pick("4\nnope\n").first[:scope],   { mode: "global" }
+
+# '4' re-prompts on a malformed URL, then accepts a valid one
+res_retry, retry_text = pick("4\nnope\nhttps://github.com/orgs/Recognize/projects/10\n")
+check "picker: '4' bad URL then valid -> project", res_retry[:scope], { mode: "project" }
+check "picker: '4' captures the retried URL",
+      res_retry[:project_url], "https://github.com/orgs/Recognize/projects/10"
+ok "picker: '4' shows a retry message on bad URL", retry_text.include?("Try again")
+
+check "picker: '4' bad URL then blank -> global", pick("4\nnope\n\n").first[:scope], { mode: "global" }
+check "picker: '4' bad URL then EOF -> global",   pick("4\nnope\n").first[:scope],  { mode: "global" }
 check "picker: garbage -> global",         pick("xyz\n").first[:scope],       { mode: "global" }
 
 _, prompt_text = pick("1\n")

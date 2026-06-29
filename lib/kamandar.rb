@@ -1341,17 +1341,22 @@ module Kamandar
           name = (input.gets || "").strip
           name.empty? ? { mode: "global" } : { mode: "repo", repo: name }
         when "4"
+          # Re-prompt on a malformed URL; blank/Enter (or EOF) cancels to global.
           entered = config[:project_url].to_s.strip
-          if entered.empty?
-            out.print "Project URL (e.g. https://github.com/orgs/ORG/projects/N): "
-            entered = (input.gets || "").strip
-          end
-          if Engine.parse_project_url(entered)
-            project_url = entered
-            { mode: "project" }
-          else
-            out.puts "kamandar: not a valid org project URL — using global."
-            { mode: "global" }
+          loop do
+            if entered.empty?
+              out.print "Project URL (e.g. https://github.com/orgs/ORG/projects/N): "
+              line = input.gets
+              break({ mode: "global" }) if line.nil? # EOF
+              entered = line.strip
+              break({ mode: "global" }) if entered.empty? # cancel
+            end
+            if Engine.parse_project_url(entered)
+              project_url = entered
+              break({ mode: "project" })
+            end
+            out.puts "kamandar: not a valid org project URL (expected …/orgs/ORG/projects/N). Try again, or press Enter for global."
+            entered = "" # force a re-prompt
           end
         else
           { mode: "global" }
