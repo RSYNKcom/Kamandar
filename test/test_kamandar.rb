@@ -328,6 +328,79 @@ check "config --demo flag off by default",
 check "config --demo flag sets demo",
       Kamandar::Config.from(env: {}, argv: ["--demo"])[:demo], true
 
+# -- config file (KEY=VALUE persistence) --------------------------------------
+# Pure parse/serialize + precedence. Uses a temp file so nothing touches the
+# real ~/.config and the suite stays hermetic (zero network, zero shared state).
+require "tmpdir"
+require "fileutils"
+
+CFG_TXT = <<~CFG
+  # a comment
+  GITHUB_TOKEN=tok_from_file
+  GH_LOGIN = filelogin
+  export PROJECT_URL="https://github.com/orgs/Acme/projects/4"
+  STALE_DAYS=5
+  EMPTY=
+
+  bogus line without equals
+CFG
+
+Dir.mktmpdir("kamandar-cfg") do |dir|
+  path = File.join(dir, "config")
+  File.write(path, CFG_TXT)
+
+  parsed = Kamandar::Config.load_file(path)
+  check "config file: parses KEY=VALUE",        parsed["GITHUB_TOKEN"], "tok_from_file"
+  check "config file: trims whitespace",        parsed["GH_LOGIN"],     "filelogin"
+  check "config file: strips quotes + export",  parsed["PROJECT_URL"],  "https://github.com/orgs/Acme/projects/4"
+  check "config file: keeps other keys",        parsed["STALE_DAYS"],   "5"
+  check "config file: skips blank value",       parsed.key?("EMPTY"),   true
+  check "config file: skips non KEY=VALUE",     parsed.key?("bogus line without equals"), false
+
+  # Missing file never raises — just an empty hash.
+  check "config file: missing file is empty",   Kamandar::Config.load_file(File.join(dir, "nope")), {}
+
+  # KAMANDAR_CONFIG points Config.from at our temp file.
+  cfg_file = Kamandar::Config.from(env: { "KAMANDAR_CONFIG" => path }, argv: [])
+  check "config file: feeds token into config", cfg_file[:token],       "tok_from_file"
+  check "config file: feeds login into config", cfg_file[:login],       "filelogin"
+  check "config file: feeds stale_days",        cfg_file[:stale_days],  5
+
+  # Real ENV (present + non-empty) wins over the file.
+  cfg_override = Kamandar::Config.from(
+    env: { "KAMANDAR_CONFIG" => path, "GH_LOGIN" => "envlogin" }, argv: []
+  )
+  check "config file: ENV overrides file",      cfg_override[:login],   "envlogin"
+  check "config file: file fills the gaps",     cfg_override[:token],   "tok_from_file"
+end
+
+# config_path: KAMANDAR_CONFIG wins, else XDG_CONFIG_HOME/kamandar/config.
+check "config_path: honours KAMANDAR_CONFIG",
+      Kamandar::Config.config_path("KAMANDAR_CONFIG" => "/tmp/x"), "/tmp/x"
+check "config_path: uses XDG_CONFIG_HOME",
+      Kamandar::Config.config_path("XDG_CONFIG_HOME" => "/cfg"), "/cfg/kamandar/config"
+
+# render_file: round-trips through load_file, quotes values that need it.
+RENDER_OUT = Kamandar::Config.render_file(
+  "GITHUB_TOKEN" => "abc", "GH_LOGIN" => "me", "PROJECT_URL" => "", "X" => "a b"
+)
+check "render_file: drops empty values",  RENDER_OUT.include?("PROJECT_URL"), false
+check "render_file: quotes spaced value", RENDER_OUT.include?('X="a b"'),     true
+Dir.mktmpdir("kamandar-rt") do |dir|
+  p = File.join(dir, "c")
+  File.write(p, RENDER_OUT)
+  check "render_file: round-trips via load_file",
+        Kamandar::Config.load_file(p)["GH_LOGIN"], "me"
+end
+
+# --init flag wiring + viewer query string.
+check "config --init flag off by default",
+      Kamandar::Config.from(env: {}, argv: [])[:init], false
+check "config --init flag sets init",
+      Kamandar::Config.from(env: {}, argv: ["--init"])[:init], true
+check "viewer query asks for login",
+      Kamandar::Engine.build_viewer_query.include?("viewer { login }"), true
+
 # -- interactive scope picker -------------------------------------------------
 # Feeds canned stdin; captures the prompt on a StringIO so nothing hits stderr.
 # Returns [{scope:, project_url:}, prompt_text].

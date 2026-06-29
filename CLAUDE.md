@@ -10,7 +10,9 @@ Kamandar — a personal, single-user GitHub "command center" CLI. One command pr
 
 ```sh
 ruby test/test_kamandar.rb          # run the full acceptance suite (zero network)
-ruby lib/kamandar.rb                # run CLI, terminal output (needs env vars below)
+./install.sh                        # symlink CLI to ~/.local/bin/kamandar (run from anywhere)
+ruby lib/kamandar.rb --init         # first-run wizard: verify + save token/login to config file
+ruby lib/kamandar.rb                # run CLI, terminal output (needs env vars or --init below)
 ruby lib/kamandar.rb --serve        # live web app on http://127.0.0.1:4567 (--port N to change)
 ruby lib/kamandar.rb --dashboard    # full-screen Matrix TUI (rain splash; r=refresh, q=quit)
 ruby lib/kamandar.rb --browser      # render + open static HTML page
@@ -18,7 +20,9 @@ ruby lib/kamandar.rb -b --watch 60  # live browser tab, re-fetch every 60s
 ruby lib/kamandar.rb --serve --demo # fabricated data (no token) — screenshots/offline trials
 ```
 
-Required env to actually run (not needed for tests): `GITHUB_TOKEN` (classic PAT: `repo, read:org, read:project`), `GH_LOGIN`. Optional: `PROJECT_URL` (enables bucket #3), `STALE_DAYS`, `DAY_MODE`, `NOT_STARTED_STATUSES`, `ITERATION_FILTER`, `ITERATION_FIELD`. See the README config table or the header comment in `lib/kamandar.rb`.
+Required config to actually run (not needed for tests): `GITHUB_TOKEN` (classic PAT: `repo, read:org, read:project`), `GH_LOGIN`. Optional: `PROJECT_URL` (enables bucket #3), `STALE_DAYS`, `DAY_MODE`, `NOT_STARTED_STATUSES`, `ITERATION_FILTER`, `ITERATION_FIELD`. Supply via shell env **or** a persisted config file (`--init` writes it). See the README config table or the header comment in `lib/kamandar.rb`.
+
+**Config resolution** (`Config.from`): precedence is **CLI flags > real ENV > config file**. The config file is a flat `KEY=VALUE` list (same names as the ENV vars; `#` comments, optional `export ` prefix, quotes stripped — parsed by hand, no dotenv gem). Path: `$KAMANDAR_CONFIG`, else `$XDG_CONFIG_HOME/kamandar/config`, else `~/.config/kamandar/config`. `Config.load_file`/`config_path`/`render_file` are pure + unit-tested; the wizard (`CLI.run_init`) and `0600` write are the only side effects. `--init` verifies the token via `GitHub.viewer_login` (Engine.build_viewer_query) before saving. Tests stay hermetic by pointing `KAMANDAR_CONFIG` at a tempfile. `install.sh` symlinks `lib/kamandar.rb` → `~/.local/bin/kamandar` (symlink, so `git pull` updates in place).
 
 No single-test runner — the suite is a hand-rolled harness (`check`/`ok` helpers), not Minitest/RSpec. Comment out cases or add a guard to isolate one.
 

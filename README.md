@@ -15,7 +15,7 @@ the opt-in `--serve`, bound to localhost.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-225%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-245%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -99,16 +99,18 @@ the opt-in `--serve`, bound to localhost.
 git clone https://github.com/cdrrazan/Kamandar.git
 cd Kamandar
 
-export GITHUB_TOKEN=ghp_xxx          # classic PAT: repo, read:org, read:project
-export GH_LOGIN=your-username
+./install.sh                     # symlink `kamandar` into ~/.local/bin (run from anywhere)
+kamandar --init                  # one-time setup: save & verify your token + login
+kamandar                         # terminal output (default) — from any directory now
 
-ruby lib/kamandar.rb             # terminal output (default)
-ruby lib/kamandar.rb --serve     # live web app at http://127.0.0.1:4567
-ruby lib/kamandar.rb --dashboard # full-screen Matrix TUI (digital-rain splash)
-ruby lib/kamandar.rb --browser   # render + open a static HTML page
-ruby lib/kamandar.rb -b --watch 60   # live tab, refreshed every 60s
-ruby lib/kamandar.rb --serve --demo  # fake data, no token — for screenshots/trials
+kamandar --serve                 # live web app at http://127.0.0.1:4567
+kamandar --dashboard             # full-screen Matrix TUI (digital-rain splash)
+kamandar --browser               # render + open a static HTML page
+kamandar -b --watch 60           # live tab, refreshed every 60s
+kamandar --serve --demo          # fake data, no token — for screenshots/trials
 ```
+
+> Prefer not to install? Everything also runs in place as `ruby lib/kamandar.rb …`.
 
 > **`--demo`** fabricates 15–20 plausible rows per bucket and skips the network
 > entirely (no token or login needed) — handy for screenshots, demos, or trying a
@@ -125,11 +127,35 @@ ruby lib/kamandar.rb --serve --demo  # fake data, no token — for screenshots/t
 > (*Assigned, not started*) populated without picking project scope, or for
 > non-interactive runs (cron).
 
-Put it on your `PATH` if you like:
+### Setup without `--init`
+
+`--init` is just a convenience — it writes a config file so you don't re-export
+vars every shell. You can skip it and provide config three ways (highest wins):
+
+1. **CLI flags** — e.g. `--scope`, `--port`, `--theme`.
+2. **Shell env** — `export GITHUB_TOKEN=… GH_LOGIN=…` (best for cron).
+3. **Config file** — a flat `KEY=VALUE` file at `~/.config/kamandar/config`
+   (override the path with `$KAMANDAR_CONFIG`). Same names as the env vars:
+
+   ```ini
+   GITHUB_TOKEN=ghp_xxx
+   GH_LOGIN=your-username
+   PROJECT_URL=https://github.com/orgs/Acme/projects/4
+   STALE_DAYS=3
+   ```
+
+   `kamandar --init` writes exactly this file (mode `0600`) after verifying the
+   token against GitHub. Edit it by hand any time.
+
+### Manual install
+
+`install.sh` symlinks `lib/kamandar.rb` (a symlink, so `git pull` updates the
+command in place). To do it yourself, or to pick a different directory:
 
 ```sh
 chmod +x lib/kamandar.rb
 ln -s "$PWD/lib/kamandar.rb" ~/.local/bin/kamandar
+# or: KAMANDAR_BIN=/usr/local/bin ./install.sh
 ```
 
 ---
@@ -141,7 +167,8 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + all surfaces + local server (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 225 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 245 cases
+├── install.sh             # symlink the CLI onto your PATH (stdlib only)
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -153,12 +180,14 @@ Kamandar/
 
 ## ⚙️ Configuration
 
-> CLI flags take precedence over environment variables.
+> Precedence: **CLI flags > environment variables > config file**
+> (`~/.config/kamandar/config`, written by `kamandar --init`).
 
 | Var / flag | Required | Default | Purpose |
 |---|:---:|---|---|
-| `GITHUB_TOKEN` | ✅ | — | Classic PAT: `repo`, `read:org`, `read:project` |
-| `GH_LOGIN` | ✅ | — | Your GitHub username |
+| `GITHUB_TOKEN` | ✅ | — | Classic PAT: `repo`, `read:org`, `read:project`. From env or config file. |
+| `GH_LOGIN` | ✅ | — | Your GitHub username. From env or config file. |
+| `--init` | | — | One-time wizard: prompt, verify token, write `~/.config/kamandar/config` (`0600`) |
 | `OUTPUT` / `--browser`, `-b` | | `terminal` | Surface: `terminal` or `browser`. The flag forces browser and overrides `OUTPUT`. |
 | `WATCH_SECONDS` / `--watch N` | | `0` (off) | Browser only: re-fetch + rewrite the page every N seconds |
 | `PROJECT_URL` | for #3 | — | Board/view URL, e.g. `https://github.com/orgs/Recognize/projects/10/views/5` |

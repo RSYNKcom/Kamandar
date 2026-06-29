@@ -50,11 +50,16 @@
 # -----------------------------------------------------------------------------
 #   1. Create a classic Personal Access Token with scopes: repo, read:org,
 #      read:project.
-#   2. Export the two required values:
+#   2. Provide the two required values, easiest first:
+#        ruby lib/kamandar.rb --init      # wizard: verify + save to a config file
+#      or export them in your shell:
 #        export GITHUB_TOKEN=ghp_xxx
 #        export GH_LOGIN=your-username
+#      or write ~/.config/kamandar/config (flat KEY=VALUE; $KAMANDAR_CONFIG
+#      overrides the path). Precedence: CLI flags > env > config file.
 #      (PROJECT_URL is optional — the scope picker asks for it when you choose
 #       project scope; set it only to wire bucket #3 non-interactively.)
+#      Tip: `./install.sh` symlinks the CLI to ~/.local/bin/kamandar.
 #   3. Run:
 #        ruby lib/kamandar.rb              # terminal output (default)
 #        ruby lib/kamandar.rb --serve      # live web app at http://127.0.0.1:4567
@@ -63,6 +68,7 @@
 #        ruby lib/kamandar.rb -b --watch 60  # live tab, refreshed every 60s
 #        ruby lib/kamandar.rb --statuses   # list a board's Status labels (to
 #                                          # configure NOT_STARTED/REVIEW_STATUSES)
+#        ruby lib/kamandar.rb --init       # first-run wizard: save token + login
 #
 # -----------------------------------------------------------------------------
 # CONFIGURATION (CLI flags take precedence over env vars)
@@ -516,6 +522,12 @@ module Kamandar
     GQL
 
     # One GraphQL document running BOTH PR searches via aliases.
+    # Tiny identity query — used by `--init` to verify a token works and learn
+    # which account it authenticates as.
+    def build_viewer_query
+      "query { viewer { login } }"
+    end
+
     def build_pr_query
       <<~GQL
         query($owed: String!, $mine: String!) {
@@ -1848,6 +1860,12 @@ module Kamandar
       body["data"]
     end
 
+    # Verify a token and return the authenticated login (nil if absent).
+    def viewer_login(token)
+      data = graphql(Engine.build_viewer_query, {}, token)
+      data.dig("viewer", "login")
+    end
+
     # Run both PR searches in one call. Returns [owed_nodes, mine_nodes].
     # `qualifier` (optional) scopes both searches (e.g. "org:Foo", "repo:o/r").
     def fetch_prs(login, token, qualifier: "")
@@ -1914,6 +1932,7 @@ module Kamandar
 
     def from(env:, argv:)
       flags = parse_flags(argv)
+      env = with_config_file(env) # config file is the base layer; real ENV wins over it
 
       not_started = (env["NOT_STARTED_STATUSES"] || "Todo,Backlog,No Status")
                     .split(",").map(&:strip).reject(&:empty?)
@@ -1955,8 +1974,76 @@ module Kamandar
         port: flags[:port] || (env["PORT"] || Server::DEFAULT_PORT).to_i,
         project_org: project_org,
         list_statuses: flags[:statuses] || false,
+        init: flags[:init] || false,
+        config_path: config_path(env),
         watch_seconds: flags.key?(:watch) ? flags[:watch] : (env["WATCH_SECONDS"] || "0").to_i
       }
+    end
+
+    # ---- config file (KEY=VALUE) -------------------------------------------
+    # Lets the user persist GITHUB_TOKEN/GH_LOGIN/etc once instead of exporting
+    # them every shell. Precedence: CLI flags > real ENV > config file. The file
+    # is a flat KEY=VALUE list (same names as the ENV vars), parsed by hand —
+    # stdlib only, no dotenv gem.
+
+    # Where the config file lives. KAMANDAR_CONFIG overrides everything (handy
+    # for tests + alternate profiles); otherwise XDG_CONFIG_HOME, then ~/.config.
+    def config_path(env)
+      explicit = env["KAMANDAR_CONFIG"]
+      return explicit if explicit && !explicit.empty?
+
+      base = env["XDG_CONFIG_HOME"]
+      base = File.join(Dir.home, ".config") if base.nil? || base.empty?
+      File.join(base, "kamandar", "config")
+    end
+
+    # Merge the on-disk config under the live ENV (ENV present & non-empty wins).
+    # Returns a plain Hash so downstream `env["KEY"]` lookups behave the same.
+    def with_config_file(env)
+      path = config_path(env)
+      return env unless path && File.file?(path)
+
+      present = {}
+      env.each { |k, v| present[k] = v unless v.nil? || v.to_s.empty? }
+      load_file(path).merge(present)
+    end
+
+    # Parse a KEY=VALUE file: blank lines and `#` comments skipped, surrounding
+    # quotes stripped, `export ` prefix tolerated. Never raises on a bad file.
+    def load_file(path)
+      out = {}
+      File.foreach(path) do |raw|
+        line = raw.strip
+        next if line.empty? || line.start_with?("#")
+
+        line = line.sub(/\Aexport\s+/, "")
+        key, sep, val = line.partition("=")
+        next if sep.empty?
+
+        key = key.strip
+        next if key.empty?
+
+        val = val.strip
+        if val.length >= 2 &&
+           ((val.start_with?('"') && val.end_with?('"')) ||
+            (val.start_with?("'") && val.end_with?("'")))
+          val = val[1..-2]
+        end
+        out[key] = val
+      end
+      out
+    rescue SystemCallError
+      {}
+    end
+
+    # Serialize a {KEY => value} hash back to KEY=VALUE lines (values quoted when
+    # they contain spaces or `#`). Pure — the CLI wizard does the actual write.
+    def render_file(values)
+      values.reject { |_k, v| v.nil? || v.to_s.empty? }.map do |k, v|
+        v = v.to_s
+        v = %("#{v}") if v =~ /[\s#"']/
+        "#{k}=#{v}"
+      end.join("\n") + "\n"
     end
 
     def parse_flags(argv)
@@ -1978,6 +2065,8 @@ module Kamandar
           flags[:scope] = Regexp.last_match(1)
         when "--statuses"
           flags[:statuses] = true
+        when "--init"
+          flags[:init] = true
         when "--dashboard"
           flags[:dashboard] = true
         when "--serve"
@@ -2011,6 +2100,8 @@ module Kamandar
 
     def run(env: ENV, argv: ARGV)
       config = Config.from(env: env, argv: argv)
+      return run_init(config) if config[:init] # first-run setup; no token needed yet
+
       validate!(config)
 
       surface = Surface.resolve_surface(
@@ -2420,8 +2511,80 @@ module Kamandar
       missing << "GH_LOGIN" unless config[:login] && !config[:login].empty?
       return if missing.empty?
       $stderr.puts "kamandar: missing required configuration: #{missing.join(', ')}"
-      $stderr.puts "See the header of this file for setup instructions."
+      $stderr.puts "Run `kamandar --init` to set them up once, or export them in your shell."
       exit 1
+    end
+
+    # First-run wizard: prompt for token + login (+ optional project URL), verify
+    # the token against GitHub, then write a 0600 config file so the user never
+    # has to export env vars again. Token is read with no echo via io/console.
+    def run_init(config, input: $stdin, out: $stdout)
+      require "io/console"
+      path = config[:config_path]
+      out.puts "Kamandar setup — writing #{path}"
+      out.puts "Leave a field blank to keep what's already set.\n\n"
+
+      token = prompt_secret(out, input, "GitHub token (classic PAT: repo, read:org, read:project): ")
+      token = config[:token] if token.empty?
+      login = prompt_line(out, input, "GitHub login (your username)", config[:login])
+      project = prompt_line(out, input, "Project URL (optional, enables board buckets)", config[:project_url])
+
+      if token.nil? || token.empty? || login.nil? || login.empty?
+        out.puts "\nkamandar: token and login are both required — nothing written."
+        return
+      end
+
+      verify_token(token, login, out)
+
+      values = { "GITHUB_TOKEN" => token, "GH_LOGIN" => login, "PROJECT_URL" => project }
+      write_config_file(path, Config.render_file(values))
+      out.puts "\nSaved. Run `kamandar` from anywhere now."
+    rescue Interrupt
+      out.puts "\nkamandar: setup cancelled."
+    end
+
+    def prompt_secret(out, input, label)
+      out.print label
+      out.flush
+      # No-echo only makes sense on a real terminal; on a pipe `noecho` raises
+      # ENOTTY, so fall back to a plain read there (tests, scripted setup).
+      value = if input.respond_to?(:noecho) && input.respond_to?(:tty?) && input.tty?
+                input.noecho(&:gets)
+              else
+                input.gets
+              end
+      out.puts # newline the suppressed Enter swallowed
+      value.to_s.strip
+    end
+
+    def prompt_line(out, input, label, current)
+      suffix = current && !current.empty? ? " [#{current}]" : ""
+      out.print "#{label}#{suffix}: "
+      out.flush
+      value = input.gets.to_s.strip
+      value.empty? ? current.to_s : value
+    end
+
+    # One viewer query to confirm the token works and matches the login. A bad
+    # token shouldn't abort the wizard — warn, let the user save anyway.
+    def verify_token(token, login, out)
+      actual = GitHub.viewer_login(token)
+      if actual.nil?
+        out.puts "kamandar: couldn't verify token (will save anyway)."
+      elsif actual.casecmp?(login)
+        out.puts "kamandar: token OK — authenticated as #{actual}."
+      else
+        out.puts "kamandar: token authenticates as #{actual}, not #{login} (saving as entered)."
+      end
+    rescue GitHub::Error => e
+      out.puts "kamandar: token check failed: #{e.message} (will save anyway)."
+    end
+
+    def write_config_file(path, contents)
+      require "fileutils"
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, contents)
+      File.chmod(0o600, path) # contains a token — keep it owner-only
     end
 
     def warn_no_project(config)
