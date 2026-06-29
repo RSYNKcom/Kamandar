@@ -10,8 +10,9 @@
 # Personal tool, single user, GitHub-only, serverless. Stdlib only.
 #
 # -----------------------------------------------------------------------------
-# WHAT IT SHOWS — seven buckets (+ one bonus)
+# WHAT IT SHOWS — the bucket set depends on scope.
 # -----------------------------------------------------------------------------
+# PROJECT scope (board-driven) — seven buckets (+ one bonus):
 #   1. Reviews you owe        — open PRs where review is requested *from you*.
 #   2. Currently building     — your own open *draft* PRs (WIP).
 #   3. Assigned, not started  — Projects V2 issues assigned to you whose Status
@@ -27,6 +28,15 @@
 #                               on the reviewer and the wait exceeds a threshold.
 #   +  Ready, no reviewer     — your non-draft PRs with nobody asked to review
 #      requested (bonus)         and no reviews yet (invisible to everyone).
+#
+# GLOBAL / ORG / REPO scope (no board) — six buckets driven by each assigned
+# issue's linked PR ("Closes #N"):
+#   1. Reviews you owe        — same as above.
+#   2. Assigned, not started  — issue assigned to you with no linked PR.
+#   3. Assigned, PR in draft  — linked PR is a draft (WIP).
+#   4. Assigned, PR in review — linked PR is ready and has a reviewer.
+#   5. Assigned, no reviewer  — linked PR is ready but nobody is asked to review.
+#   6. Your PRs gone quiet    — same as above.
 #
 # Architecture: Engine -> buckets -> Surface, in three separable layers.
 #   * Engine   : pure, side-effect-free functions (GraphQL building, time math,
@@ -445,6 +455,12 @@ module Kamandar
       scoped("is:open is:pr author:#{login}", qualifier)
     end
 
+    # Open issues assigned to you (non-project scopes classify these by the
+    # state of their linked PR).
+    def assigned_issues_query(login, qualifier: "")
+      scoped("is:open is:issue assignee:#{login}", qualifier)
+    end
+
     def scoped(base, qualifier)
       base = "#{base} #{qualifier}".strip if qualifier && !qualifier.to_s.empty?
       "#{base} archived:false"
@@ -478,6 +494,38 @@ module Kamandar
           }
           mine: search(query: $mine, type: ISSUE, first: 50) {
             nodes { ... on PullRequest { #{PR_FIELDS} } }
+          }
+        }
+      GQL
+    end
+
+    # Fields for the PR(s) linked to an assigned issue via "Closes #N" — enough
+    # to reuse has_reviewer? for the in-review vs no-reviewer split.
+    LINKED_PR_FIELDS = <<~GQL
+      isDraft
+      reviewRequests(first: 1) { totalCount }
+      timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 1) {
+        nodes { ... on ReviewRequestedEvent { createdAt } }
+      }
+      latestOpinionatedReviews(first: 10) { nodes { state submittedAt } }
+    GQL
+
+    # Open issues assigned to you, each with the open PRs that would close it.
+    def build_assigned_issues_query
+      <<~GQL
+        query($q: String!) {
+          assigned: search(query: $q, type: ISSUE, first: 50) {
+            nodes {
+              ... on Issue {
+                number
+                title
+                url
+                repository { nameWithOwner }
+                closedByPullRequestsReferences(first: 5, includeClosedPrs: false) {
+                  nodes { #{LINKED_PR_FIELDS} }
+                }
+              }
+            }
           }
         }
       GQL
@@ -564,29 +612,63 @@ module Kamandar
       }
     end
 
+    def normalize_issue(issue)
+      {
+        number: issue["number"],
+        title: issue["title"],
+        url: issue["url"],
+        repo: issue.dig("repository", "nameWithOwner")
+      }
+    end
+
+    # The open PRs that would close this issue ("Closes #N" references).
+    def linked_prs(issue)
+      issue.dig("closedByPullRequestsReferences", "nodes") || []
+    end
+
+    # Classify an assigned issue by the state of its linked PR(s):
+    #   :not_started — no open linked PR
+    #   :draft       — every linked PR is a draft (work in progress)
+    #   :in_review   — a ready (non-draft) linked PR has a reviewer
+    #   :no_reviewer — a ready linked PR exists but nobody is asked to review
+    def issue_pr_state(issue)
+      prs = linked_prs(issue)
+      return :not_started if prs.empty?
+      ready = prs.reject { |pr| pr["isDraft"] }
+      return :draft if ready.empty?
+      ready.any? { |pr| has_reviewer?(pr) } ? :in_review : :no_reviewer
+    end
+
     # Turn raw fetched data into the buckets hash. Pure: takes already-fetched
     # node arrays plus config, returns the classified hash that both surfaces
-    # consume. Surfaces never re-query or re-classify.
+    # consume. The bucket set depends on scope: project scope is board-driven,
+    # every other scope is issue+PR driven. Surfaces never re-query or re-classify.
     #
-    # config keys: :login, :not_started, :review_statuses, :qa_statuses,
+    # config keys: :scope, :login, :not_started, :review_statuses, :qa_statuses,
     #              :blocked_statuses, :stale_days, :day_mode, :iteration_filter,
     #              :iteration_field
-    def classify(owed_prs:, my_prs:, project_items:, iterations: nil,
-                 config:, today:)
-      mode = config[:day_mode]
-      stale_days = config[:stale_days]
-
-      reviews_owed = owed_prs.map { |pr| normalize_pr(pr) }
-
-      wip = my_prs.select { |pr| pr["isDraft"] }.map { |pr| normalize_pr(pr) }
-
-      stale = my_prs.select { |pr| stale?(pr, stale_days: stale_days, mode: mode, today: today) }
-                    .map do |pr|
-        normalize_pr(pr,
-                     days: days_since(handoff_at(pr), mode: mode, today: today),
-                     mode: mode)
+    def classify(owed_prs:, my_prs:, project_items: [], assigned_issues: [],
+                 iterations: nil, config:, today:)
+      if scope_mode(config) == "project"
+        classify_project(owed_prs: owed_prs, my_prs: my_prs,
+                         project_items: project_items, iterations: iterations,
+                         config: config, today: today)
+      else
+        classify_issue(owed_prs: owed_prs, my_prs: my_prs,
+                       assigned_issues: assigned_issues, config: config, today: today)
       end
+    end
 
+    def scope_mode(config)
+      (config[:scope] && config[:scope][:mode]) || "global"
+    end
+
+    # Board-driven buckets (project scope).
+    def classify_project(owed_prs:, my_prs:, project_items:, iterations:, config:, today:)
+      mode = config[:day_mode]
+      reviews_owed = owed_prs.map { |pr| normalize_pr(pr) }
+      wip = my_prs.select { |pr| pr["isDraft"] }.map { |pr| normalize_pr(pr) }
+      stale = stale_rows(my_prs, config: config, today: today)
       forgot = my_prs.select { |pr| forgot_reviewer?(pr) }.map { |pr| normalize_pr(pr) }
 
       board_opts = {
@@ -596,37 +678,56 @@ module Kamandar
         iterations: iterations,
         today: today
       }
-
-      assigned = assigned_not_started(
-        project_items, not_started: config[:not_started], **board_opts
-      ).map { |item| normalize_item(item) }
-
-      in_review = assigned_in_review(
-        project_items, review_statuses: config[:review_statuses] || [], **board_opts
-      ).map { |item| normalize_item(item) }
-
-      in_qa = assigned_in_qa(
-        project_items, qa_statuses: config[:qa_statuses] || [], **board_opts
-      ).map { |item| normalize_item(item) }
-
-      blocked = assigned_blocked(
-        project_items, blocked_statuses: config[:blocked_statuses] || [], **board_opts
-      ).map { |item| normalize_item(item) }
+      board = lambda do |statuses|
+        assigned_with_status(project_items, statuses: statuses, **board_opts)
+          .map { |item| normalize_item(item) }
+      end
 
       {
         reviews_owed: reviews_owed,
         wip: wip,
-        assigned_not_started: assigned,
-        in_review: in_review,
-        in_qa: in_qa,
-        blocked: blocked,
+        assigned_not_started: board.call(config[:not_started] || []),
+        in_review: board.call(config[:review_statuses] || []),
+        in_qa: board.call(config[:qa_statuses] || []),
+        blocked: board.call(config[:blocked_statuses] || []),
         stale: stale,
         forgot_reviewer: forgot
       }
     end
 
-    # Ordered metadata describing each bucket, shared by both surfaces.
-    BUCKETS = [
+    # Issue+PR-driven buckets (global/org/repo scope).
+    def classify_issue(owed_prs:, my_prs:, assigned_issues:, config:, today:)
+      reviews_owed = owed_prs.map { |pr| normalize_pr(pr) }
+      stale = stale_rows(my_prs, config: config, today: today)
+
+      grouped = Hash.new { |h, k| h[k] = [] }
+      assigned_issues.each { |iss| grouped[issue_pr_state(iss)] << normalize_issue(iss) }
+
+      {
+        reviews_owed: reviews_owed,
+        assigned_todo: grouped[:not_started],
+        assigned_wip: grouped[:draft],
+        assigned_review: grouped[:in_review],
+        assigned_no_reviewer: grouped[:no_reviewer],
+        stale: stale
+      }
+    end
+
+    # Shared "PRs gone quiet" rows (used by both modes).
+    def stale_rows(my_prs, config:, today:)
+      mode = config[:day_mode]
+      stale_days = config[:stale_days]
+      my_prs.select { |pr| stale?(pr, stale_days: stale_days, mode: mode, today: today) }
+            .map do |pr|
+        normalize_pr(pr,
+                     days: days_since(handoff_at(pr), mode: mode, today: today),
+                     mode: mode)
+      end
+    end
+
+    # Ordered bucket metadata per scope mode. Surfaces iterate whichever set the
+    # active scope selects (key, title, empty-message).
+    BUCKETS_PROJECT = [
       [:reviews_owed,         "Reviews you owe",            "Nothing waiting on your review. \u{1F389}"],
       [:wip,                  "Currently building (WIP)",   "No drafts in flight."],
       [:assigned_not_started, "Assigned, not started",      "Nothing assigned and waiting to start."],
@@ -636,6 +737,22 @@ module Kamandar
       [:stale,                "Your PRs gone quiet",        "No PRs have gone quiet."],
       [:forgot_reviewer,      "Ready, no reviewer requested", "Every ready PR has a reviewer."]
     ].freeze
+
+    BUCKETS_ISSUE = [
+      [:reviews_owed,         "Reviews you owe",                  "Nothing waiting on your review. \u{1F389}"],
+      [:assigned_todo,        "Assigned, not started",            "Nothing assigned and waiting to start."],
+      [:assigned_wip,         "Assigned, PR in draft",            "No assigned work in progress."],
+      [:assigned_review,      "Assigned, PR in review",           "No assigned PRs in review."],
+      [:assigned_no_reviewer, "Assigned, PR ready (no reviewer)", "Every ready PR has a reviewer."],
+      [:stale,                "Your PRs gone quiet",              "No PRs have gone quiet."]
+    ].freeze
+
+    # Default kept as the project set for any back-compat reference.
+    BUCKETS = BUCKETS_PROJECT
+
+    def bucket_meta(mode)
+      mode.to_s == "project" ? BUCKETS_PROJECT : BUCKETS_ISSUE
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -679,7 +796,7 @@ module Kamandar
       lines << header
       lines << ("=" * 72)
 
-      Engine::BUCKETS.each do |key, title, empty|
+      Engine.bucket_meta(Engine.scope_mode(config)).each do |key, title, empty|
         rows = buckets[key] || []
         lines << ""
         lines << "#{title} (#{rows.size})"
@@ -725,7 +842,12 @@ module Kamandar
       in_qa:                { icon: "\u{1F9EA}", color: "#0a7ea4" }, # 🧪
       blocked:              { icon: "\u{1F6A7}", color: "#cf222e" }, # 🚧
       stale:                { icon: "\u{23F3}",  color: "var(--warn)" }, # ⏳
-      forgot_reviewer:      { icon: "\u{1F648}", color: "#9a6700" }  # 🙈
+      forgot_reviewer:      { icon: "\u{1F648}", color: "#9a6700" }, # 🙈
+      # issue+PR scope buckets
+      assigned_todo:        { icon: "\u{1F4CB}", color: "#1a7f37" }, # 📋
+      assigned_wip:         { icon: "\u{1F528}", color: "#8250df" }, # 🔨
+      assigned_review:      { icon: "\u{1F440}", color: "#6e40c9" }, # 👀
+      assigned_no_reviewer: { icon: "\u{1F648}", color: "#9a6700" }  # 🙈
     }.freeze
 
     def escape(text)
@@ -748,9 +870,10 @@ module Kamandar
           ""
         end
 
-      total = Engine::BUCKETS.sum { |key, _, _| (buckets[key] || []).size }
+      meta_list = Engine.bucket_meta(Engine.scope_mode(config))
+      total = meta_list.sum { |key, _, _| (buckets[key] || []).size }
 
-      sections = Engine::BUCKETS.map do |key, title, empty|
+      sections = meta_list.map do |key, title, empty|
         rows = buckets[key] || []
         meta = BUCKET_META[key] || { icon: "•", color: "var(--accent)" }
         classes = +"bucket"
@@ -965,6 +1088,16 @@ module Kamandar
       owed = (data.dig("owed", "nodes") || []).reject(&:empty?)
       mine = (data.dig("mine", "nodes") || []).reject(&:empty?)
       [owed, mine]
+    end
+
+    # Open issues assigned to you (with their linked PRs), optionally scoped.
+    def fetch_assigned_issues(login, token, qualifier: "")
+      data = graphql(
+        Engine.build_assigned_issues_query,
+        { "q" => Engine.assigned_issues_query(login, qualifier: qualifier) },
+        token
+      )
+      (data.dig("assigned", "nodes") || []).reject(&:empty?)
     end
 
     # Paginated board fetch. Returns [items, iterations_config].
@@ -1258,43 +1391,39 @@ module Kamandar
       result
     end
 
-    # Fetch everything, then classify once. The buckets feed whichever surface.
+    # Fetch everything, then classify once. The bucket set depends on scope:
+    # project is board-driven, every other scope is issue+PR driven.
     def fetch_and_classify(config)
       scope = config[:scope] || { mode: "global" }
+      qualifier = Engine.search_qualifier(scope)
 
-      # org/repo scopes filter at query time via a search qualifier.
-      owed, mine = GitHub.fetch_prs(config[:login], config[:token],
-                                    qualifier: Engine.search_qualifier(scope))
+      # owed (reviews you owe) and mine (gone quiet) are needed in both modes.
+      owed, mine = GitHub.fetch_prs(config[:login], config[:token], qualifier: qualifier)
 
-      parsed = config[:project_url] ? Engine.parse_project_url(config[:project_url]) : nil
-      project_items = []
-      iterations = nil
-      if parsed
-        project_items, iterations = GitHub.fetch_board(
-          parsed[:org], parsed[:num], config[:token],
-          iteration_field: config[:iteration_field]
-        )
-      end
-
-      # project scope filters PR buckets to the PRs that are items on the board.
       if scope[:mode] == "project"
+        parsed = config[:project_url] ? Engine.parse_project_url(config[:project_url]) : nil
+        project_items = []
+        iterations = nil
         if parsed
+          project_items, iterations = GitHub.fetch_board(
+            parsed[:org], parsed[:num], config[:token],
+            iteration_field: config[:iteration_field]
+          )
+          # Limit PR buckets to the PRs that are items on the board.
           urls = Engine.project_pr_urls(project_items)
           owed = Engine.filter_prs_by_urls(owed, urls)
           mine = Engine.filter_prs_by_urls(mine, urls)
         else
-          $stderr.puts "kamandar: SCOPE=project needs PROJECT_URL — showing account-wide PRs."
+          $stderr.puts "kamandar: SCOPE=project needs PROJECT_URL — board buckets will be empty."
         end
-      end
 
-      Engine.classify(
-        owed_prs: owed,
-        my_prs: mine,
-        project_items: project_items,
-        iterations: iterations,
-        config: config,
-        today: Time.now
-      )
+        Engine.classify(owed_prs: owed, my_prs: mine, project_items: project_items,
+                        iterations: iterations, config: config, today: Time.now)
+      else
+        assigned = GitHub.fetch_assigned_issues(config[:login], config[:token], qualifier: qualifier)
+        Engine.classify(owed_prs: owed, my_prs: mine, assigned_issues: assigned,
+                        config: config, today: Time.now)
+      end
     end
 
     def validate!(config)
@@ -1308,8 +1437,9 @@ module Kamandar
     end
 
     def warn_no_project(config)
+      return unless Engine.scope_mode(config) == "project"
       return if config[:project_url] && !config[:project_url].empty?
-      $stderr.puts "kamandar: PROJECT_URL unset — 'Assigned, not started' will be empty."
+      $stderr.puts "kamandar: PROJECT_URL unset — board buckets will be empty."
     end
   end
 end

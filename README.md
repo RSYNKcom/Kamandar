@@ -13,7 +13,7 @@ quiet — in your terminal or a self-contained browser page.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-83%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-98%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -59,6 +59,22 @@ Kamandar for @you  —  2026-06-22 09:14  (business days)
 | 7 | ⏳ **Your PRs gone quiet** | Your **ready** PRs where the ball is on the reviewer past a threshold |
 | ➕ | 🙈 **Ready, no reviewer requested** | *(bonus)* Your ready PRs with nobody asked to review and no reviews yet — silently invisible to everyone |
 
+> **The bucket set depends on [scope](#-scope).** The table above is **project**
+> scope, where buckets #3–6 come from your board's **Status** columns. In
+> **global / org / repo** scope there is no board, so those four are replaced by
+> issue+PR buckets driven by the state of each assigned issue's linked PR:
+>
+> | Bucket | Lands here |
+> |---|---|
+> | 📥 Reviews you owe | `review-requested:@me` (same as project) |
+> | 📋 Assigned, not started | issue assigned to you with **no linked PR** |
+> | 🔨 Assigned, PR in draft | linked PR is a **draft** |
+> | 👀 Assigned, PR in review | linked PR is **ready + has a reviewer** |
+> | 🙈 Assigned, PR ready (no reviewer) | linked PR is ready but **nobody asked** |
+> | ⏳ Your PRs gone quiet | same as project |
+>
+> Issue→PR links use GitHub's **"Closes #123"** references.
+
 ---
 
 ## 🚀 Quick start
@@ -98,7 +114,7 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + both surfaces (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 83 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 98 cases
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -293,7 +309,7 @@ and fabricated fixtures — **zero network**.
 ```sh
 ruby test/test_kamandar.rb
 # ...
-# 83 passed, 0 failed
+# 98 passed, 0 failed
 ```
 
 ---

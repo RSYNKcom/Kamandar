@@ -24,7 +24,7 @@ No single-test runner — the suite is a hand-rolled harness (`check`/`ok` helpe
 Everything lives in one file: `lib/kamandar.rb`. Layers are Ruby modules, ordered **Engine → buckets → Surface**:
 
 - **`Engine`** — pure, side-effect-free: no network, no ENV, no I/O. Time math, GraphQL query *strings*, and all classification. Operates on **raw GraphQL node hashes (string keys)** so the same code classifies fixtures and live data. This is the unit-testable core.
-- **buckets** — a plain hash `Engine.classify` returns: `{reviews_owed, wip, assigned_not_started, in_review, in_qa, blocked, stale, forgot_reviewer}`. `Engine::BUCKETS` is the ordered metadata (key, title, empty-message) both surfaces iterate.
+- **buckets** — a plain hash `Engine.classify` returns. **The bucket set depends on scope** (`config[:scope][:mode]`): `project` is board-driven (`classify_project` → `{reviews_owed, wip, assigned_not_started, in_review, in_qa, blocked, stale, forgot_reviewer}`); every other scope is issue+PR driven (`classify_issue` → `{reviews_owed, assigned_todo, assigned_wip, assigned_review, assigned_no_reviewer, stale}`, classified by each assigned issue's linked-PR state via `issue_pr_state`). `Engine.bucket_meta(mode)` returns the ordered metadata for that mode (`BUCKETS_PROJECT` / `BUCKETS_ISSUE`); both surfaces iterate it. `Engine::BUCKETS` aliases the project set.
 - **`Surface` / `TerminalSurface` / `BrowserSurface`** — consume buckets only; never re-query or re-classify. Contract is `render(buckets, ...) -> String` + `emit`. Adding email/menubar = new surface, **no engine change**.
 - **`GitHub`** — the *only* network layer (`Net::HTTP` → GraphQL). `Config` resolves ENV + CLI flags (flags win). `CLI` is the only place with side effects + ENV.
 

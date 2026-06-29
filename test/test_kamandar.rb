@@ -341,8 +341,11 @@ check "#12c --browser overrides OUTPUT=terminal",
       S.resolve_surface(output_env: "terminal", browser_flag: true), :browser
 
 # Build buckets via the real classifier for HTML assertions.
+# project scope -> board-driven buckets are exercised.
 config = {
-  login: "me", not_started: ["Todo", "Backlog", "No Status"],
+  login: "me", scope: { mode: "project" },
+  not_started: ["Todo", "Backlog", "No Status"],
+  review_statuses: [], qa_statuses: [], blocked_statuses: [],
   iteration_filter: "off", iteration_field: "Iteration",
   stale_days: 2, day_mode: "business"
 }
@@ -390,6 +393,67 @@ term = T.render(buckets, config: config, generated_at: TODAY)
 ok "terminal shows stale handoff suffix",
    term.include?("business days since you handed off")
 ok "terminal lists reviews-owed item", term.include?("#101 Review me")
+
+# =============================================================================
+# Issue+PR scope (global/org/repo): assigned issues classified by linked PR
+# =============================================================================
+def linked_pr(draft: false, reviewer: false)
+  {
+    "isDraft" => draft,
+    "reviewRequests" => { "totalCount" => reviewer ? 1 : 0 },
+    "timelineItems" => { "nodes" => [] },
+    "latestOpinionatedReviews" => { "nodes" => [] }
+  }
+end
+
+def issue_node(number:, title: "Issue", repo: "o/r", linked: [])
+  {
+    "number" => number, "title" => title,
+    "url" => "https://github.com/o/r/issues/#{number}",
+    "repository" => { "nameWithOwner" => repo },
+    "closedByPullRequestsReferences" => { "nodes" => linked }
+  }
+end
+
+check "issue_pr_state: no PR -> not_started",
+      E.issue_pr_state(issue_node(number: 1)), :not_started
+check "issue_pr_state: draft PR -> draft",
+      E.issue_pr_state(issue_node(number: 2, linked: [linked_pr(draft: true)])), :draft
+check "issue_pr_state: ready + reviewer -> in_review",
+      E.issue_pr_state(issue_node(number: 3, linked: [linked_pr(reviewer: true)])), :in_review
+check "issue_pr_state: ready, no reviewer -> no_reviewer",
+      E.issue_pr_state(issue_node(number: 4, linked: [linked_pr(reviewer: false)])), :no_reviewer
+
+check "bucket_meta(project) is the board set",
+      E.bucket_meta("project"), Kamandar::Engine::BUCKETS_PROJECT
+check "bucket_meta(global) is the issue set",
+      E.bucket_meta("global"), Kamandar::Engine::BUCKETS_ISSUE
+
+issue_config = { login: "me", scope: { mode: "global" },
+                 stale_days: 2, day_mode: "business" }
+issue_buckets = E.classify(
+  owed_prs: [pr(number: 101, title: "Review me", url: "https://github.com/o/r/pull/101", created: D.(2026, 6, 18))],
+  my_prs: [pr(number: 202, title: "Gone quiet", url: "https://github.com/o/r/pull/202", created: D.(2026, 6, 15), last_request: D.(2026, 6, 17), review_requests_total: 1)],
+  assigned_issues: [
+    issue_node(number: 1, linked: []),
+    issue_node(number: 2, linked: [linked_pr(draft: true)]),
+    issue_node(number: 3, linked: [linked_pr(reviewer: true)]),
+    issue_node(number: 4, linked: [linked_pr(reviewer: false)])
+  ],
+  config: issue_config, today: TODAY
+)
+check "issue mode: not started bucket",  issue_buckets[:assigned_todo].map { |r| r[:number] }, [1]
+check "issue mode: PR draft bucket",      issue_buckets[:assigned_wip].map { |r| r[:number] }, [2]
+check "issue mode: in review bucket",     issue_buckets[:assigned_review].map { |r| r[:number] }, [3]
+check "issue mode: no reviewer bucket",   issue_buckets[:assigned_no_reviewer].map { |r| r[:number] }, [4]
+check "issue mode: reviews owed kept",    issue_buckets[:reviews_owed].map { |r| r[:number] }, [101]
+check "issue mode: gone quiet kept",      issue_buckets[:stale].map { |r| r[:number] }, [202]
+ok "issue mode: no board-only keys",      !issue_buckets.key?(:in_qa) && !issue_buckets.key?(:blocked)
+
+# issue-mode HTML renders the issue bucket set, not the board set
+issue_html = B.render(issue_buckets, config: issue_config, generated_at: TODAY)
+ok "issue HTML shows issue bucket heading", issue_html.include?("Assigned, PR in review")
+ok "issue HTML omits board-only heading", !issue_html.include?("In QA")
 
 # =============================================================================
 # Network errors + spinner (CLI robustness)
