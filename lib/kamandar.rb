@@ -851,12 +851,17 @@ module Kamandar
       assigned_todo: "\u{1F4CB}", assigned_wip: "\u{1F528}",
       assigned_review: "\u{1F440}", assigned_no_reviewer: "\u{1F648}"
     }.freeze
+    # 256-color, mid-tone palette. Chosen for legibility on BOTH light and dark
+    # terminals: the old 16-color bright codes (esp. 33 yellow / 36 cyan) and
+    # bold's bright variant washed out on light backgrounds. Bold (1;) here only
+    # sets weight — with 38;5;N the color stays put, so titles stay readable.
+    AMBER = "38;5;172" # warm orange that survives a white background (was 33)
     COLOR = {
-      reviews_owed: "34", wip: "35", assigned_not_started: "32",
-      in_review: "36", in_qa: "36", blocked: "31",
-      stale: "33", forgot_reviewer: "33",
-      assigned_todo: "32", assigned_wip: "35",
-      assigned_review: "36", assigned_no_reviewer: "33"
+      reviews_owed: "38;5;33",  wip: "38;5;99", assigned_not_started: "38;5;34",
+      in_review: "38;5;37",     in_qa: "38;5;31", blocked: "38;5;160",
+      stale: AMBER,             forgot_reviewer: AMBER,
+      assigned_todo: "38;5;34", assigned_wip: "38;5;99",
+      assigned_review: "38;5;37", assigned_no_reviewer: AMBER
     }.freeze
 
     # Render the report. `color: true` adds ANSI escapes + emoji; `false`
@@ -907,7 +912,7 @@ module Kamandar
             end
           num = paint.call("2", "##{row[:number]}")
           repo = paint.call("2", "(#{row[:repo]})")
-          suf = suffix.empty? ? "" : paint.call("33", suffix)
+          suf = suffix.empty? ? "" : paint.call(AMBER, suffix)
           lines << "  #{num} #{row[:title]}  #{repo}#{suf}"
           lines << "    #{paint.call('2;4', row[:url])}"
         end
