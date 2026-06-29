@@ -1423,7 +1423,7 @@ module Kamandar
       # assigned issues/PRs. REVIEW_KEYS lists the "others' work" buckets.
       reviews, mine = items.partition { |it| REVIEW_KEYS.include?(it[:key]) }
       boxes = [
-        sidebox("Reviews", reviews),
+        sidebox("Others' work", reviews),
         sidebox("Your work", mine, foot: scope_label)
       ].join("\n")
 
@@ -1466,8 +1466,12 @@ module Kamandar
     # generated to match the current bucket count.
     def tab_css(count)
       (0...count).map do |i|
+        on = %(#kt-#{i}:checked~.sidebar .navitem[for="kt-#{i}"])
         %(#kt-#{i}:checked~.panels #kp-#{i}{display:block}) +
-          %(#kt-#{i}:checked~.sidebar .navitem[for="kt-#{i}"]{background:var(--card);border-color:var(--c);box-shadow:var(--shadow)})
+          # selected tab: fill with the bucket color, flip text/badge to white
+          %(#{on}{background:var(--c);border-color:var(--c);box-shadow:var(--shadow)}) +
+          %(#{on} .navtitle{color:#fff}) +
+          %(#{on} .count{background:rgba(255,255,255,.26);color:#fff})
       end.join("\n")
     end
 

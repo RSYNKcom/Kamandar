@@ -611,6 +611,8 @@ ok "server page builds radio tabs", page.include?(%(<input class="tabr" type="ra
 ok "server page panels are id'd", page.include?(%(<main class="panels">)) &&
                                   page.include?(%(id="kp-0"))
 ok "server page generates tab rules", page.include?("#kt-0:checked~.panels #kp-0{display:block}")
+ok "selected tab fills with the bucket color", page.include?('.navitem[for="kt-0"]{background:var(--c)')
+ok "selected tab flips text to white", page.include?('.navitem[for="kt-0"] .navtitle{color:#fff}')
 ok "server page stays script-free", !(page =~ /<script/)
 # tab_css emits one show + one highlight rule per bucket, scaled to the count.
 ok "tab_css scales to bucket count", SURF.tab_css(3).scan("display:block").size == 3
@@ -618,7 +620,7 @@ ok "tab_css scales to bucket count", SURF.tab_css(3).scan("display:block").size 
 ok "server page has a top nav", page.include?(%(<nav class="topbar">)) &&
                                 page.include?(%(<span class="brandname">Kamandar</span>))
 # sidebar splits into two boxes: reviews (others' work) and your own work.
-ok "sidebar has a Reviews box", page.include?(%(<span class="side-title">Reviews</span>))
+ok "sidebar has an Others' work box", page.include?(%(<span class="side-title">Others&#39; work</span>))
 ok "sidebar has a Your work box", page.include?(%(<span class="side-title">Your work</span>))
 ok "sidebar uses two carded boxes", page.scan(%(<section class="sidebox">)).size == 2
 # sidebar tabs use short labels; the full title stays on the panel + tooltip.
