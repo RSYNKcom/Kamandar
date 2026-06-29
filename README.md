@@ -372,6 +372,73 @@ JavaScript**:
   the served page is online), falling back to the system font stack. Tracks
   light/dark via `prefers-color-scheme`.
 
+#### Remote access via Cloudflare Tunnel
+
+Want to reach the app from your phone or another machine at a real URL —
+`https://kamandar.yourdomain.com` instead of `localhost:4567`? A
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+does it **without changing the bind**. `cloudflared` runs on the same machine as
+`--serve` and dials *outbound* to `127.0.0.1:4567`, so the server stays
+localhost-only — no `0.0.0.0`, no port-forward, no open inbound firewall ports.
+
+```
+  phone / laptop ──HTTPS──► Cloudflare edge ──tunnel──► cloudflared ──► 127.0.0.1:4567
+                          (kamandar.yourdomain.com)        (your machine)        (--serve)
+```
+
+> 🔒 **Gate it with Cloudflare Access — this is not optional.** The page shows
+> your **private** GitHub queue (repos, PR/issue titles). The token never
+> reaches the HTML, but the *data* is sensitive, and a tunnel hostname is
+> reachable by anyone who has it. A self-hosted **Access** policy (free on
+> Cloudflare Zero Trust) puts an email/SSO login in front so only *you* get in.
+> Without it, your work queue is on the public internet.
+
+**One-time setup** (needs a Cloudflare account + your domain on Cloudflare, and
+[`cloudflared` installed](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)):
+
+```sh
+cloudflared tunnel login                                   # authorize, pick your domain
+cloudflared tunnel create kamandar                         # creates the tunnel + a creds file
+cloudflared tunnel route dns kamandar kamandar.yourdomain.com   # point the hostname at it
+```
+
+Then map the hostname to the local port in `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: kamandar
+ingress:
+  - hostname: kamandar.yourdomain.com
+    service: http://127.0.0.1:4567
+  - service: http_status:404
+```
+
+Finally, in the **Cloudflare Zero Trust dashboard** → *Access → Applications*,
+add a **self-hosted** app for `kamandar.yourdomain.com` with a policy that
+allows only your email. (Do this before sharing or bookmarking the URL.)
+
+**Daily use** — start during work hours, stop after:
+
+```sh
+kamandar --serve                 # terminal 1: the app on 127.0.0.1:4567
+cloudflared tunnel run kamandar  # terminal 2: bridge to kamandar.yourdomain.com
+# → open https://kamandar.yourdomain.com, set Auto-refresh to e.g. 30s, log in via Access
+# → Ctrl-C both when you're done; the URL goes dead until next time
+```
+
+Notes:
+
+- **`--serve` is the host.** The tunnel is only a pipe — kill `--serve` and the
+  URL returns 502. Both processes must run on the same machine, and that machine
+  must stay awake (laptop asleep = URL down).
+- The token + login live **only on that machine** (via `--init` or env); they
+  never travel through Cloudflare.
+- Auto-refresh re-queries GitHub each cycle, so keep `poll` sane (`30`+, not
+  `5`) to stay well under API rate limits.
+- For a quick throwaway demo with **no domain and no setup**, swap the named
+  tunnel for `cloudflared tunnel --url http://127.0.0.1:4567` — it prints a
+  random `*.trycloudflare.com` URL. That one is **unauthenticated**; treat the
+  link as public and use it only for fabricated `--demo` data.
+
 ### Browser (offline file)
 
 Renders **one self-contained HTML document** (inline CSS, no external/CDN
