@@ -906,7 +906,7 @@ module Kamandar
         # Left-pad the #number token to the widest in this bucket so every title
         # starts at the same column (#8 lines up under #10488).
         numw = rows.map { |r| "##{r[:number]}".length }.max
-        rows.each do |row|
+        rows.each_with_index do |row, idx|
           suffix =
             if key == :stale && row[:days]
               "  — #{row[:days]} #{row[:mode]} days since you handed off"
@@ -918,6 +918,7 @@ module Kamandar
           suf = suffix.empty? ? "" : paint.call(AMBER, suffix)
           lines << "  #{num} #{row[:title]}  #{repo}#{suf}"
           lines << "    #{paint.call('2;4', row[:url])}"
+          lines << "" unless idx == rows.size - 1 # breathing room between entries
         end
       end
       lines << ""
