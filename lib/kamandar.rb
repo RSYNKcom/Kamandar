@@ -1284,6 +1284,23 @@ module Kamandar
       assigned_review: "PR in review", assigned_no_reviewer: "PR, no reviewer"
     }.freeze
 
+    # One-line explanation of what each bucket collects, shown under the panel
+    # heading. Keyed by bucket key across both scope modes.
+    DESCRIPTIONS = {
+      reviews_owed: "Open PRs where a review was requested from you — your turn to review.",
+      wip: "Your own draft PRs still in progress.",
+      assigned_not_started: "Issues assigned to you whose status hasn't moved off the backlog.",
+      in_review: "Your issues submitted and waiting on review.",
+      in_qa: "Your work that's currently in QA.",
+      blocked: "Your work that's flagged as blocked.",
+      stale: "Your ready (non-draft) PRs where the ball is in the reviewer's court and it's gone quiet.",
+      forgot_reviewer: "Your ready PRs that don't have a reviewer requested yet.",
+      assigned_todo: "Issues assigned to you with no linked PR yet — not started.",
+      assigned_wip: "Assigned issues whose linked PR is still a draft.",
+      assigned_review: "Assigned issues whose PR is ready and has a reviewer.",
+      assigned_no_reviewer: "Assigned issues whose ready PR has no reviewer requested."
+    }.freeze
+
     # Google Sans webfont. Served pages have network access (live localhost),
     # so a CDN link is fine here — unlike BrowserSurface, which must stay
     # self-contained for offline file:// use. Falls back to the system stack
@@ -1411,9 +1428,12 @@ module Kamandar
         classes = +"bucket"
         classes << " warn" if key == :stale
         classes << " is-empty" if rows.empty?
+        desc = DESCRIPTIONS[key]
+        desc_html = desc ? %(<p class="desc">#{esc.call(desc)}</p>) : ""
         panels << <<~SECTION.chomp
           <section class="#{classes}" id="kp-#{i}" style="--c:#{meta[:color]}">
             <h2><span class="icon">#{meta[:icon]}</span> <span class="htitle">#{esc.call(title)}</span> <span class="count">#{rows.size}</span></h2>
+            #{desc_html}
             #{body}
           </section>
         SECTION
@@ -1565,6 +1585,7 @@ module Kamandar
         .side-foot{margin-top:11px;padding:9px 4px 2px;border-top:1px solid var(--border);font-size:.74rem;color:var(--muted);text-align:center}
         .panels{flex:1 1 auto;min-width:0;margin:0;padding:0;max-width:none}
         .panels .bucket{display:none;margin:0}
+        .panels .desc{margin:-2px 2px 14px;color:var(--muted);font-size:.86rem;line-height:1.4;max-width:62ch}
         .navitem:focus-within{outline:2px solid var(--accent);outline-offset:2px}
         /* footer */
         .foot{flex-shrink:0;border-top:1px solid var(--border);background:var(--card)}

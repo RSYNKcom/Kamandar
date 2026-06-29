@@ -627,6 +627,9 @@ ok "sidebar uses two carded boxes", page.scan(%(<section class="sidebox">)).size
 ok "sidebar tab uses a short label", page.include?(%(<span class="navtitle">Reviews</span>))
 ok "navitem keeps full title as tooltip", page.include?(%(title="Reviews you owe"))
 ok "panel heading keeps full title", page.include?(%(<span class="htitle">Reviews you owe</span>))
+# each panel explains what its bucket collects.
+ok "panel shows a description", page.include?(%(<p class="desc">)) &&
+   page.include?("review was requested from you")
 ok "server page has a footer", page.include?(%(<footer class="foot">)) &&
                                page.include?("Kamandar v#{Kamandar::VERSION}")
 ok "footer shows the generated time", page.include?("generated ")
