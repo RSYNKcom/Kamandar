@@ -2,11 +2,11 @@
 
 ## Overview
 
-kamandar is a single-user, serverless command-line tool. It holds no
-persistent state, runs no server, and exposes no network listener. Its security
-surface is small by design, but it does handle a credential (`GITHUB_TOKEN`),
-so this document describes how that credential is treated and how to report
-issues.
+kamandar is a single-user command-line tool. It holds no persistent state and
+needs no backend. Its only network listener is **opt-in** (`--serve`), and it
+binds **`127.0.0.1` only** — never a public interface. Its security surface is
+small by design, but it does handle a credential (`GITHUB_TOKEN`), so this
+document describes how that credential is treated and how to report issues.
 
 ## The token
 
@@ -20,14 +20,31 @@ issues.
 
 ### Hard guarantee: secrets never reach the rendered page
 
-The browser surface renders a **static, in-process snapshot**. The page:
+Every surface is handed only **already-fetched display data** — PR/issue titles
+and URLs — never the token. This holds for the static browser page
+(`BrowserSurface`) and for the live web app (`ServerSurface.page` /
+`error_page`, served by `--serve`): the rendered output
 
-- makes **no** GitHub (or any network) calls — it contains only the
-  already-fetched display data;
-- **never** includes the `GITHUB_TOKEN` or any other secret.
+- contains only display data — no `GITHUB_TOKEN` or any other secret;
+- (browser file) makes **no** further network calls; (server) re-fetches
+  server-side only, so the token stays in the process and never in a response.
 
-This is enforced by an acceptance test (a sentinel token is passed through and
-the rendered HTML is asserted not to contain it). Please keep that test green.
+This is enforced by acceptance tests — a sentinel token is passed through and
+the rendered HTML, the server page, and a real `--serve` HTTP response are each
+asserted not to contain it. Please keep those tests green.
+
+### The `--serve` web app
+
+`--serve` starts a minimal stdlib `TCPServer` HTTP/1.1 listener for a single
+user on your own machine:
+
+- it binds **`127.0.0.1`** only, so it is not reachable from the network;
+- it serves over plain HTTP (localhost only — no TLS needed for loopback);
+- responses set `Cache-Control: no-store` and carry no credentials.
+
+Anyone with access to your loopback interface (i.e. a local account on your
+machine) can read the served page while the server runs. Stop it (`Ctrl-C`)
+when you're done, and don't port-forward or proxy it to a public address.
 
 The generated HTML is written to a predictable path
 (`<tmpdir>/kamandar.html`) so watch-mode reloads hit the same browser tab.

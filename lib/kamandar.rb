@@ -57,6 +57,7 @@
 #       project scope; set it only to wire bucket #3 non-interactively.)
 #   3. Run:
 #        ruby lib/kamandar.rb              # terminal output (default)
+#        ruby lib/kamandar.rb --serve      # live web app at http://127.0.0.1:4567
 #        ruby lib/kamandar.rb --dashboard  # full-screen Matrix TUI (rain splash)
 #        ruby lib/kamandar.rb --browser    # render + open a static HTML page
 #        ruby lib/kamandar.rb -b --watch 60  # live tab, refreshed every 60s
@@ -142,6 +143,8 @@ require "time"
 require "tmpdir"
 require "rbconfig"
 require "io/console" # default gem (ships with Ruby): winsize + getch for the TUI
+require "socket" # stdlib: TCPServer for the local web UI (--serve)
+require "cgi"    # stdlib: query-string parsing + HTML escaping for the server
 
 module Kamandar
   VERSION = "1.0.0"
@@ -1102,26 +1105,7 @@ module Kamandar
 
       meta_list = Engine.bucket_meta(Engine.scope_mode(config))
       total = meta_list.sum { |key, _, _| (buckets[key] || []).size }
-
-      sections = meta_list.map do |key, title, empty|
-        rows = buckets[key] || []
-        meta = BUCKET_META[key] || { icon: "•", color: "var(--accent)" }
-        classes = +"bucket"
-        classes << " warn" if key == :stale
-        classes << " is-empty" if rows.empty?
-        body =
-          if rows.empty?
-            %(<p class="empty">#{escape(empty)}</p>)
-          else
-            rows.map { |row| card(row, key) }.join("\n")
-          end
-        <<~SECTION
-          <section class="#{classes}" style="--c:#{meta[:color]}">
-            <h2><span class="icon">#{meta[:icon]}</span> <span class="htitle">#{escape(title)}</span> <span class="count">#{rows.size}</span></h2>
-            #{body}
-          </section>
-        SECTION
-      end.join("\n")
+      sections = sections_html(buckets, meta_list)
 
       chips = [
         %(<span class="chip total">#{total} open</span>),
@@ -1157,6 +1141,30 @@ module Kamandar
         </body>
         </html>
       HTML
+    end
+
+    # Build the <section> blocks for each bucket. Shared by the static page
+    # (render) and the live server page (ServerSurface). Display data only.
+    def sections_html(buckets, meta_list)
+      meta_list.map do |key, title, empty|
+        rows = buckets[key] || []
+        meta = BUCKET_META[key] || { icon: "•", color: "var(--accent)" }
+        classes = +"bucket"
+        classes << " warn" if key == :stale
+        classes << " is-empty" if rows.empty?
+        body =
+          if rows.empty?
+            %(<p class="empty">#{escape(empty)}</p>)
+          else
+            rows.map { |row| card(row, key) }.join("\n")
+          end
+        <<~SECTION
+          <section class="#{classes}" style="--c:#{meta[:color]}">
+            <h2><span class="icon">#{meta[:icon]}</span> <span class="htitle">#{escape(title)}</span> <span class="count">#{rows.size}</span></h2>
+            #{body}
+          </section>
+        SECTION
+      end.join("\n")
     end
 
     def card(row, key)
@@ -1234,6 +1242,185 @@ module Kamandar
       system(*cmd)
     rescue StandardError => e
       $stderr.puts "kamandar: could not open browser (#{e.message}); page at #{path}"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # ServerSurface — the live local web app (served by Server over TCP).
+  # Reuses BrowserSurface's CSS and cards, and adds a control bar so you can
+  # switch scope and refresh in-page. SECURITY: like BrowserSurface, it is
+  # handed only display data — never a token. Same no-secret guarantee.
+  # ---------------------------------------------------------------------------
+  module ServerSurface
+    module_function
+
+    SCOPE_MODES = %w[global org repo project].freeze
+
+    # The full live page: header chips + a control bar + the bucket sections.
+    # `scope`/`name`/`project_url`/`poll` reflect the current request so the
+    # form re-renders with the user's selection.
+    def page(buckets, config:, generated_at:, mode: "global", name: "",
+             project_url: "", poll: 0)
+      esc = BrowserSurface.method(:escape)
+      meta_list = Engine.bucket_meta(Engine.scope_mode(config))
+      total = meta_list.sum { |key, _, _| (buckets[key] || []).size }
+      sections = BrowserSurface.sections_html(buckets, meta_list)
+
+      refresh = poll.to_i > 0 ? %(<meta http-equiv="refresh" content="#{poll.to_i}">) : ""
+
+      options = SCOPE_MODES.map do |m|
+        sel = m == mode ? " selected" : ""
+        %(<option value="#{m}"#{sel}>#{m}</option>)
+      end.join
+
+      chips = [
+        %(<span class="chip total">#{total} open</span>),
+        %(<span class="chip">@#{esc.call(config[:login])}</span>),
+        %(<span class="chip">#{esc.call(generated_at.strftime('%H:%M:%S'))}</span>),
+        %(<span class="chip">#{esc.call(config[:day_mode])} days</span>),
+        (poll.to_i > 0 ? %(<span class="chip live">live #{poll.to_i}s</span>) : nil)
+      ].compact.join("\n      ")
+
+      <<~HTML
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        #{refresh}
+        <title>Kamandar — @#{esc.call(config[:login])}</title>
+        <style>#{BrowserSurface.css}#{extra_css}</style>
+        </head>
+        <body>
+        <header>
+          <div class="wrap">
+            <h1><span class="bow">\u{1F3F9}</span> Kamandar</h1>
+            <div class="meta">
+              #{chips}
+            </div>
+            <form class="controls" method="get" action="/">
+              <select name="mode" aria-label="Scope">#{options}</select>
+              <input type="text" name="name" value="#{esc.call(name)}" placeholder="org or owner/name">
+              <input type="text" name="project_url" value="#{esc.call(project_url)}" placeholder="project board URL">
+              <input type="number" name="poll" value="#{poll.to_i}" min="0" step="5" title="auto-refresh seconds (0 = off)" class="poll">
+              <button type="submit">Apply</button>
+              <a class="refresh" href="#{esc.call(self_link(mode, name, project_url, poll))}" title="Refresh now">↻</a>
+            </form>
+          </div>
+        </header>
+        <main>
+        #{sections}
+        </main>
+        </body>
+        </html>
+      HTML
+    end
+
+    # A tiny error page reusing the same chrome — shown when a fetch fails so the
+    # server keeps running instead of dropping the connection.
+    def error_page(message, config:)
+      esc = BrowserSurface.method(:escape)
+      <<~HTML
+        <!DOCTYPE html>
+        <html lang="en"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Kamandar — error</title><style>#{BrowserSurface.css}#{extra_css}</style></head>
+        <body><header><div class="wrap">
+          <h1><span class="bow">\u{1F3F9}</span> Kamandar</h1>
+        </div></header>
+        <main><section class="bucket warn" style="--c:var(--warn)">
+          <h2><span class="icon">\u{26A0}\u{FE0F}</span> <span class="htitle">Couldn't load your queue</span></h2>
+          <p class="empty">#{esc.call(message)}</p>
+          <p class="empty"><a href="/">Try again</a></p>
+        </section></main></body></html>
+      HTML
+    end
+
+    # GET link back to self with the current selection preserved.
+    def self_link(mode, name, project_url, poll)
+      m = mode.to_s == "global" ? "" : mode.to_s # global is the default; omit it
+      q = { "mode" => m, "name" => name, "project_url" => project_url,
+            "poll" => poll.to_i }
+      pairs = q.reject { |_, v| v.to_s.empty? || v == 0 }
+               .map { |k, v| "#{k}=#{CGI.escape(v.to_s)}" }
+      pairs.empty? ? "/" : "/?#{pairs.join('&')}"
+    end
+
+    # A few rules layered on top of BrowserSurface.css for the control bar.
+    def extra_css
+      <<~CSS
+        .controls{margin:12px 0 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+        .controls select,.controls input,.controls button{font:inherit;font-size:.82rem;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:6px 10px}
+        .controls input{min-width:160px}
+        .controls .poll{min-width:70px;width:80px}
+        .controls button{cursor:pointer;font-weight:600;border-color:var(--accent);color:var(--accent)}
+        .controls button:hover{background:var(--accent);color:#fff}
+        .controls .refresh{text-decoration:none;font-size:1.1rem;line-height:1;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:5px 10px}
+        .controls .refresh:hover{color:var(--accent);border-color:var(--accent)}
+      CSS
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Server — a minimal stdlib HTTP/1.1 server (TCPServer) for the live web UI.
+  # Single-user, localhost-only. Pure helpers (request parsing, response
+  # framing, scope resolution) are unit-tested; the accept loop lives in CLI.
+  # ---------------------------------------------------------------------------
+  module Server
+    module_function
+
+    HOST = "127.0.0.1" # localhost only — never expose the queue on the network
+    DEFAULT_PORT = 4567
+
+    STATUS_TEXT = {
+      200 => "OK", 204 => "No Content", 404 => "Not Found",
+      500 => "Internal Server Error"
+    }.freeze
+
+    # Parse a raw HTTP request (we only need the request line). Returns
+    # { method:, path:, query: {String=>String} } or nil if unparseable.
+    def parse_request(raw)
+      line = raw.to_s.lines.first.to_s.strip
+      method, target, = line.split(" ", 3)
+      return nil if method.nil? || target.nil?
+
+      path, qs = target.split("?", 2)
+      query = qs ? CGI.parse(qs).transform_values(&:first) : {}
+      { method: method, path: path, query: query }
+    end
+
+    # Frame a full HTTP/1.1 response. Connection: close keeps the loop simple.
+    def http_response(status, body, type: "text/html; charset=utf-8")
+      bytes = body.to_s.b
+      reason = STATUS_TEXT[status] || "OK"
+      [
+        "HTTP/1.1 #{status} #{reason}",
+        "Content-Type: #{type}",
+        "Content-Length: #{bytes.bytesize}",
+        "Cache-Control: no-store",
+        "Connection: close",
+        "", ""
+      ].join("\r\n").b + bytes
+    end
+
+    # Turn the form query into a scope hash (via the pure Engine parser) plus the
+    # raw inputs the page needs to re-render the form. project_org seeds bare
+    # `org` from PROJECT_URL, matching the CLI picker.
+    def resolve_scope(query, project_org:)
+      mode = query["mode"].to_s.strip
+      mode = "global" if mode.empty?
+      name = query["name"].to_s.strip
+      raw =
+        case mode
+        when "org"  then name.empty? ? "org" : "org:#{name}"
+        when "repo" then "repo:#{name}"
+        when "project" then "project"
+        else "global"
+        end
+      scope = Engine.parse_scope(raw, project_org: project_org)
+      { scope: scope, mode: mode, name: name,
+        project_url: query["project_url"].to_s.strip,
+        poll: query["poll"].to_i }
     end
   end
 
@@ -1408,6 +1595,9 @@ module Kamandar
         browser_flag: flags[:browser],
         theme: (flags[:theme] || env["THEME"] || "").to_s.strip.downcase,
         dashboard: flags[:dashboard] || false,
+        serve: flags[:serve] || false,
+        port: flags[:port] || (env["PORT"] || Server::DEFAULT_PORT).to_i,
+        project_org: project_org,
         list_statuses: flags[:statuses] || false,
         watch_seconds: flags.key?(:watch) ? flags[:watch] : (env["WATCH_SECONDS"] || "0").to_i
       }
@@ -1434,6 +1624,13 @@ module Kamandar
           flags[:statuses] = true
         when "--dashboard"
           flags[:dashboard] = true
+        when "--serve"
+          flags[:serve] = true
+        when "--port"
+          flags[:port] = argv[i + 1].to_i
+          i += 1
+        when /\A--port=(\d+)\z/
+          flags[:port] = Regexp.last_match(1).to_i
         when "--theme"
           flags[:theme] = argv[i + 1]
           i += 1
@@ -1467,6 +1664,9 @@ module Kamandar
       # project URL if they choose project and none is set). Browser, cron, and
       # pipes are skipped so nothing ever blocks on stdin.
       return print_statuses(config) if config[:list_statuses]
+
+      # The live web UI picks its own scope in-page, so skip the stdin picker.
+      return run_server(config) if config[:serve]
 
       if surface == :terminal && !config[:scope_given] && $stdin.tty?
         picked = prompt_scope(config)
@@ -1573,6 +1773,92 @@ module Kamandar
         sleep delay
         heads = DashboardSurface.step_heads(heads, rows)
       end
+    end
+
+    # Live web UI: a localhost-only HTTP server that re-fetches per request and
+    # serves the colorful page with in-page scope controls. One request at a
+    # time (single-user); a fetch failure renders an error page, not a crash.
+    # SECURITY: binds 127.0.0.1 only, and the token never reaches any response.
+    def run_server(config, host: Server::HOST, open: true)
+      port   = config[:port].to_i
+      port   = Server::DEFAULT_PORT if port <= 0
+      server = TCPServer.new(host, port)
+      url    = "http://#{host}:#{port}"
+      $stderr.puts "kamandar: serving your queue at #{url}  (Ctrl-C to stop)"
+      open_url(url) if open
+
+      loop do
+        client = server.accept
+        begin
+          handle_request(client, config)
+        rescue StandardError => e
+          $stderr.puts "kamandar: request error (#{e.class}: #{e.message})"
+        ensure
+          client.close
+        end
+      end
+    rescue Errno::EADDRINUSE
+      $stderr.puts "kamandar: port #{config[:port]} is already in use — try --port N."
+      exit 1
+    rescue Interrupt
+      $stderr.puts "\nkamandar: server stopped."
+    ensure
+      server&.close
+    end
+
+    # Open a full URL (http) in the default browser — unlike BrowserSurface's
+    # opener, which assumes a local file path.
+    def open_url(url, host_os: RbConfig::CONFIG["host_os"])
+      system(*Surface.browser_open_command(host_os, url))
+    rescue StandardError => e
+      $stderr.puts "kamandar: open #{url} manually (#{e.message})"
+    end
+
+    # Read one request off the socket, route it, and write the response.
+    def handle_request(client, config)
+      raw = read_http_request(client)
+      req = Server.parse_request(raw)
+      return client.write(Server.http_response(400, "bad request")) if req.nil?
+
+      if req[:method] != "GET"
+        return client.write(Server.http_response(404, "not found"))
+      end
+
+      case req[:path]
+      when "/favicon.ico"
+        client.write(Server.http_response(204, ""))
+      when "/"
+        client.write(serve_queue(req[:query], config))
+      else
+        client.write(Server.http_response(404, "not found"))
+      end
+    end
+
+    # Build the queue page for a request: resolve scope from the query, fetch,
+    # classify, render. On a GitHub error, serve the error page (still HTTP 200
+    # chrome) so the long-running server survives a transient blip.
+    def serve_queue(query, config)
+      sel = Server.resolve_scope(query, project_org: config[:project_org])
+      live = config.merge(scope: sel[:scope],
+                          project_url: sel[:project_url].empty? ? config[:project_url] : sel[:project_url])
+      buckets = fetch_and_classify(live)
+      html = ServerSurface.page(buckets, config: live, generated_at: Time.now,
+                                         mode: sel[:mode], name: sel[:name],
+                                         project_url: sel[:project_url], poll: sel[:poll])
+      Server.http_response(200, html)
+    rescue GitHub::Error => e
+      Server.http_response(200, ServerSurface.error_page(e.message, config: config))
+    end
+
+    # Read the request head (up to the blank line). We don't consume a body —
+    # the UI only issues GETs — so headers are enough to route on.
+    def read_http_request(client)
+      buf = +""
+      while (line = client.gets)
+        buf << line
+        break if line == "\r\n" || line == "\n" || buf.bytesize > 16_384
+      end
+      buf
     end
 
     # Diagnostic for --statuses: fetch the board and print each issue assigned

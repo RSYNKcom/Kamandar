@@ -13,7 +13,7 @@ quiet — in your terminal or a self-contained browser page.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-145%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-175%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -89,10 +89,16 @@ export GITHUB_TOKEN=ghp_xxx          # classic PAT: repo, read:org, read:project
 export GH_LOGIN=your-username
 
 ruby lib/kamandar.rb             # terminal output (default)
+ruby lib/kamandar.rb --serve     # live web app at http://127.0.0.1:4567
 ruby lib/kamandar.rb --dashboard # full-screen Matrix TUI (digital-rain splash)
 ruby lib/kamandar.rb --browser   # render + open a static HTML page
 ruby lib/kamandar.rb -b --watch 60   # live tab, refreshed every 60s
 ```
+
+> **`--serve`** is the graphical app: a localhost-only web page with in-page
+> scope switching, a refresh button, and optional auto-poll. Pure stdlib
+> (`TCPServer`), no gems, bound to `127.0.0.1` only, and — like every surface —
+> the token never reaches the page. Use `--port N` (or `PORT`) to change the port.
 
 > `PROJECT_URL` is **optional** — the [scope picker](#-scope) asks for the board
 > URL when you choose `project`. Set it only if you want bucket #3
@@ -115,7 +121,7 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + both surfaces (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 145 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 175 cases
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -147,6 +153,8 @@ Kamandar/
 | `DAY_MODE` | | `business` | `business` (skip Sat/Sun) or `calendar` |
 | `THEME` / `--theme` | | — | `matrix` renders a green-on-black boxed TUI (terminal only; pipes stay plain) |
 | `--dashboard` | | off | Full-screen Matrix TUI: digital-rain splash, then live panels (`r` refresh, `q` quit). Needs an interactive TTY; falls back to plain output otherwise |
+| `--serve` | | off | Live web app: localhost-only HTTP server with in-page scope controls + refresh. Token never reaches the page |
+| `--port N` / `PORT` | | `4567` | Port for `--serve` (bound to `127.0.0.1` only) |
 
 Only the **org** and **project number** are parsed from `PROJECT_URL` (via
 `/orgs/<org>/projects/<num>`); the saved-view number is ignored — see
@@ -321,7 +329,7 @@ and fabricated fixtures — **zero network**.
 ```sh
 ruby test/test_kamandar.rb
 # ...
-# 145 passed, 0 failed
+# 175 passed, 0 failed
 ```
 
 ---

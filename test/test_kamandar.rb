@@ -517,6 +517,87 @@ ok "dashboard footer offers quit", dash_plain.include?("[q] quit")
 ok "dashboard uses bright green", dash.include?("\e[1;92m")
 check "dashboard fills exactly rows lines", dash.split("\r\n").size, 24
 
+# -- bonus: local web app (Server + ServerSurface) ----------------------------
+SRV  = Kamandar::Server
+SURF = Kamandar::ServerSurface
+
+# parse_request: pulls method, path, and decoded query off the request line.
+req = SRV.parse_request("GET /?mode=org&name=Recognize HTTP/1.1\r\nHost: x\r\n\r\n")
+check "parse_request method", req[:method], "GET"
+check "parse_request path", req[:path], "/"
+check "parse_request query mode", req[:query]["mode"], "org"
+check "parse_request query name", req[:query]["name"], "Recognize"
+ok "parse_request returns nil on garbage", SRV.parse_request("").nil?
+
+# http_response: a well-formed HTTP/1.1 head with an accurate Content-Length.
+resp = SRV.http_response(200, "héllo") # multibyte: length must be in BYTES
+ok "http_response status line", resp.start_with?("HTTP/1.1 200 OK\r\n")
+ok "http_response closes the connection", resp.include?("Connection: close")
+ok "http_response Content-Length is byte count",
+   resp.include?("Content-Length: #{'héllo'.bytesize}")
+check "http_response 404 reason", SRV.http_response(404, "x").lines.first, "HTTP/1.1 404 Not Found\r\n"
+
+# resolve_scope: form query -> Engine scope hash (+ raw inputs for re-render).
+glob = SRV.resolve_scope({}, project_org: nil)
+check "resolve_scope blank -> global", glob[:scope], { mode: "global" }
+org = SRV.resolve_scope({ "mode" => "org", "name" => "Recognize" }, project_org: nil)
+check "resolve_scope org:NAME", org[:scope], { mode: "org", org: "Recognize" }
+bare = SRV.resolve_scope({ "mode" => "org" }, project_org: "Acme")
+check "resolve_scope bare org reuses project_org", bare[:scope], { mode: "org", org: "Acme" }
+repo = SRV.resolve_scope({ "mode" => "repo", "name" => "o/r" }, project_org: nil)
+check "resolve_scope repo:owner/name", repo[:scope], { mode: "repo", repo: "o/r" }
+proj = SRV.resolve_scope({ "mode" => "project", "project_url" => "u", "poll" => "30" }, project_org: nil)
+check "resolve_scope project mode", proj[:scope], { mode: "project" }
+check "resolve_scope carries project_url", proj[:project_url], "u"
+check "resolve_scope carries poll", proj[:poll], 30
+
+# self_link: round-trips the current selection, dropping empties.
+check "self_link with no selection -> /", SURF.self_link("global", "", "", 0), "/"
+ok "self_link keeps mode + name",
+   SURF.self_link("org", "Recognize", "", 0) == "/?mode=org&name=Recognize"
+
+# page: the live page reuses the cards, adds controls, and leaks no token.
+SECRET = "ghp_supersecrettoken"
+page = SURF.page(buckets, config: config.merge(token: SECRET),
+                          generated_at: TODAY, mode: "org", name: "Acme", poll: 60)
+ok "server page is HTML", page.start_with?("<!DOCTYPE html>")
+ok "server page reuses bucket content", page.include?("#101") && page.include?("Review me")
+ok "server page has a scope control", page.include?(%(<select name="mode")) &&
+                                      page.include?(%(<option value="org" selected))
+ok "server page has a refresh control", page.include?("↻")
+ok "server page reflects poll interval", page.include?(%(http-equiv="refresh" content="60"))
+ok "server page NEVER contains the token", !page.include?(SECRET)
+
+# error_page: same chrome, no token, still renders a retry link.
+errp = SURF.error_page("boom", config: config.merge(token: SECRET))
+ok "error_page shows the message", errp.include?("boom")
+ok "error_page offers a retry link", errp.include?(%(href="/"))
+ok "error_page leaks no token", !errp.include?(SECRET)
+
+# end-to-end: a real socket round-trip through handle_request (stubbed fetch).
+require "socket"
+module Kamandar::CLI
+  def self.fetch_and_classify(_config) # stub: no network in tests
+    { reviews_owed: [{ number: 1, title: "Served", repo: "o/r", url: "http://x" }] }
+  end
+end
+srv = TCPServer.new("127.0.0.1", 0)
+port = srv.addr[1]
+acceptor = Thread.new do
+  c = srv.accept
+  Kamandar::CLI.handle_request(c, config.merge(scope: { mode: "global" }))
+  c.close
+end
+sock = TCPSocket.new("127.0.0.1", port)
+sock.write("GET /?mode=global HTTP/1.1\r\nHost: localhost\r\n\r\n")
+served = sock.read
+sock.close
+acceptor.join
+srv.close
+ok "live server returns 200", served.start_with?("HTTP/1.1 200 OK")
+ok "live server serves the page body", served.include?("Served")
+ok "live server response never carries the token", !served.include?(SECRET)
+
 # =============================================================================
 # Issue+PR scope (global/org/repo): assigned issues classified by linked PR
 # =============================================================================

@@ -11,6 +11,7 @@ Kamandar — a personal, single-user GitHub "command center" CLI. One command pr
 ```sh
 ruby test/test_kamandar.rb          # run the full acceptance suite (zero network)
 ruby lib/kamandar.rb                # run CLI, terminal output (needs env vars below)
+ruby lib/kamandar.rb --serve        # live web app on http://127.0.0.1:4567 (--port N to change)
 ruby lib/kamandar.rb --dashboard    # full-screen Matrix TUI (rain splash; r=refresh, q=quit)
 ruby lib/kamandar.rb --browser      # render + open static HTML page
 ruby lib/kamandar.rb -b --watch 60  # live browser tab, re-fetch every 60s
@@ -26,8 +27,8 @@ Everything lives in one file: `lib/kamandar.rb`. Layers are Ruby modules, ordere
 
 - **`Engine`** — pure, side-effect-free: no network, no ENV, no I/O. Time math, GraphQL query *strings*, and all classification. Operates on **raw GraphQL node hashes (string keys)** so the same code classifies fixtures and live data. This is the unit-testable core.
 - **buckets** — a plain hash `Engine.classify` returns. **The bucket set depends on scope** (`config[:scope][:mode]`): `project` is board-driven (`classify_project` → `{reviews_owed, wip, assigned_not_started, in_review, in_qa, blocked, stale, forgot_reviewer}`); every other scope is issue+PR driven (`classify_issue` → `{reviews_owed, assigned_todo, assigned_wip, assigned_review, assigned_no_reviewer, stale}`, classified by each assigned issue's linked-PR state via `issue_pr_state`). `Engine.bucket_meta(mode)` returns the ordered metadata for that mode (`BUCKETS_PROJECT` / `BUCKETS_ISSUE`); both surfaces iterate it. `Engine::BUCKETS` aliases the project set.
-- **`Surface` / `TerminalSurface` / `BrowserSurface`** — consume buckets only; never re-query or re-classify. Contract is `render(buckets, ...) -> String` + `emit`. Adding email/menubar = new surface, **no engine change**.
-- **`GitHub`** — the *only* network layer (`Net::HTTP` → GraphQL). `Config` resolves ENV + CLI flags (flags win). `CLI` is the only place with side effects + ENV.
+- **`Surface` / `TerminalSurface` / `DashboardSurface` / `BrowserSurface` / `ServerSurface`** — consume buckets only; never re-query or re-classify. Contract is `render`/`page(buckets, ...) -> String` + `emit`. Adding email/menubar = new surface, **no engine change**. `ServerSurface` reuses `BrowserSurface`'s `css`/`card`/`sections_html` and adds an in-page scope control bar.
+- **`GitHub`** — the *only* outbound network layer (`Net::HTTP` → GraphQL). **`Server`** is the *only* inbound one: a minimal stdlib `TCPServer` HTTP/1.1 loop for `--serve`, bound to `127.0.0.1`. Its pure helpers (`parse_request`, `http_response`, `resolve_scope`) are unit-tested; the accept loop lives in `CLI.run_server`. `Config` resolves ENV + CLI flags (flags win). `CLI` is the only place with side effects + ENV.
 
 The whole file is guarded by `if __FILE__ == $PROGRAM_NAME` at the bottom, so `test/` can `require` it without running or reading ENV.
 
@@ -36,7 +37,7 @@ The whole file is guarded by `if __FILE__ == $PROGRAM_NAME` at the bottom, so `t
 - **Keep the engine pure.** `today:` and `mode:` are injected as args (never `Time.now` inside Engine) — that's what makes the suite deterministic with a fixed "today" (Monday 2026-06-22). Preserve that when editing classification.
 - **Stdlib only.** Do not add gems or a Gemfile. A new dependency breaks the project's core constraint.
 - Tests are the **spec of record** (`test/test_kamandar.rb` header says so). Behavior changes should update tests alongside.
-- The browser surface renders **one self-contained HTML file** (inline CSS, no CDN/external assets, no `<script src>`, works over `file://`). Tests assert these properties (#13f–h) and that **no token ever reaches the HTML** (#14). Don't introduce external assets or pass secrets into `render`.
+- The browser surface renders **one self-contained HTML file** (inline CSS, no CDN/external assets, no `<script src>`, works over `file://`). Tests assert these properties (#13f–h) and that **no token ever reaches the HTML** (#14). Don't introduce external assets or pass secrets into `render`. The same **token-never-in-output** guarantee covers `ServerSurface.page`/`error_page` and the live `--serve` response (tests assert it on all three). The server binds `127.0.0.1` only — never `0.0.0.0`.
 
 ## Bucket #7 (stale PRs) — the non-obvious logic
 
