@@ -1916,46 +1916,57 @@ module Kamandar
     # { scope:, project_url: } — project_url may be the value the user just
     # entered (for project scope) or the one already in config.
     def prompt_scope(config, input: $stdin, out: $stderr)
-      out.puts "Scope for PR buckets:"
-      out.puts "  1) global   — account-wide (default)"
-      out.puts "  2) org      — a single organization"
-      out.puts "  3) repo     — a single repository"
-      out.puts "  4) project  — PRs that are items on a GitHub project board"
+      tty   = out.respond_to?(:tty?) && out.tty?
+      paint = ->(c, s) { tty ? "\e[#{c}m#{s}\e[0m" : s }
+      title = ->(s) { paint.call("1", s) }            # bold
+      key   = ->(s) { paint.call("1;38;5;33", s) }    # bold blue digit
+      dim   = ->(s) { paint.call("2", s) }            # hints / examples
+
+      out.puts
+      out.puts "#{title.call("\u{1F3F9} Kamandar")} — which GitHub work should I show?"
+      out.puts dim.call("Pick how wide to look. Press Enter to keep the default.")
+      out.puts
+      # Each row: digit · mode (padded) · what it covers · example/hint.
+      out.puts "  #{key.call('1')}  #{'global'.ljust(9)}Every repo your account touches      #{dim.call('· default')}"
+      out.puts "  #{key.call('2')}  #{'org'.ljust(9)}A single organization                #{dim.call('· e.g. Recognize')}"
+      out.puts "  #{key.call('3')}  #{'repo'.ljust(9)}A single repository                  #{dim.call('· e.g. acme/api')}"
+      out.puts "  #{key.call('4')}  #{'project'.ljust(9)}A GitHub project board               #{dim.call('· paste its URL')}"
+      out.puts
 
       # Re-prompt until a valid choice; blank/Enter (or EOF) means global.
       choice = nil
       loop do
-        out.print "Select 1-4 (Enter = global): "
+        out.print "#{title.call('Choose 1–4')} #{dim.call('(Enter = global)')}: "
         line = input.gets
         choice = line.nil? ? "" : line.strip
         break if choice.empty? || %w[1 2 3 4].include?(choice)
-        out.puts "kamandar: please enter 1, 2, 3, or 4 (or press Enter for global)."
+        out.puts dim.call("Please type 1, 2, 3, or 4 — or press Enter for global.")
       end
 
       project_url = config[:project_url]
       scope =
         case choice
         when "2"
-          out.print "Org name: "
+          out.print "#{title.call('Organization')} #{dim.call('(e.g. Recognize)')}: "
           name = (input.gets || "").strip
           name.empty? ? { mode: "global" } : { mode: "org", org: name }
         when "3"
           # Re-prompt until "owner/name"; blank/Enter (or EOF) cancels to global.
           loop do
-            out.print "Repo (owner/name): "
+            out.print "#{title.call('Repository')} #{dim.call('(owner/name, e.g. acme/api)')}: "
             line = input.gets
             break({ mode: "global" }) if line.nil? # EOF
             name = line.strip
             break({ mode: "global" }) if name.empty? # cancel
             break({ mode: "repo", repo: name }) if Engine.valid_repo?(name)
-            out.puts "kamandar: repo must be owner/name (e.g. acme/api). Try again, or press Enter for global."
+            out.puts dim.call("That isn't owner/name (e.g. acme/api). Try again, or press Enter for global.")
           end
         when "4"
           # Re-prompt on a malformed URL; blank/Enter (or EOF) cancels to global.
           entered = config[:project_url].to_s.strip
           loop do
             if entered.empty?
-              out.print "Project URL (e.g. https://github.com/orgs/ORG/projects/N): "
+              out.print "#{title.call('Project board URL')} #{dim.call('(github.com/orgs/ORG/projects/N)')}: "
               line = input.gets
               break({ mode: "global" }) if line.nil? # EOF
               entered = line.strip
@@ -1965,7 +1976,7 @@ module Kamandar
               project_url = entered
               break({ mode: "project" })
             end
-            out.puts "kamandar: not a valid org project URL (expected …/orgs/ORG/projects/N). Try again, or press Enter for global."
+            out.puts dim.call("That isn't a project board URL (expected …/orgs/ORG/projects/N). Try again, or press Enter for global.")
             entered = "" # force a re-prompt
           end
         else

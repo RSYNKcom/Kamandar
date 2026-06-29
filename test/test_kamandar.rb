@@ -373,7 +373,7 @@ check "picker: '4' bad URL then EOF -> global",   pick("4\nnope\n").first[:scope
 # invalid choice re-prompts until a valid one (or blank) is entered
 res_badchoice, badchoice_text = pick("google.com\n2\nRecognize\n")
 check "picker: invalid choice then '2' -> org", res_badchoice[:scope], { mode: "org", org: "Recognize" }
-ok "picker: invalid choice shows a retry message", badchoice_text.include?("please enter 1")
+ok "picker: invalid choice shows a retry message", badchoice_text.include?("type 1, 2, 3, or 4")
 check "picker: invalid choice then blank -> global", pick("google.com\n\n").first[:scope], { mode: "global" }
 check "picker: invalid choice then EOF -> global",   pick("google.com\n").first[:scope],   { mode: "global" }
 
