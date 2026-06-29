@@ -15,7 +15,7 @@ the opt-in `--serve`, bound to localhost.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-245%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-254%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -168,7 +168,7 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + all surfaces + local server (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 245 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 254 cases
 ├── install.sh             # symlink the CLI onto your PATH (stdlib only)
 ├── README.md
 ├── CONTRIBUTING.md
@@ -205,6 +205,7 @@ Kamandar/
 | `--dashboard` | | off | Full-screen Matrix TUI: digital-rain splash, then live panels (`r` refresh, `q` quit). Needs an interactive TTY; falls back to plain output otherwise |
 | `--serve` | | off | Live web app: localhost-only HTTP server with in-page scope controls + refresh. Token never reaches the page |
 | `--port N` / `PORT` | | `4567` | Port for `--serve` (bound to `127.0.0.1` only) |
+| `--tunnel [name]` / `KAMANDAR_TUNNEL` | | off | Spawn a [Cloudflare Tunnel](#remote-access-via-cloudflare-tunnel) child alongside `--serve` (implies `--serve`); tunnel name defaults to `kamandar`. Needs `cloudflared` on `PATH` |
 | `--demo` | | off | Render fabricated data (15–20 rows/bucket) with no network or token — for screenshots and offline trials |
 
 Only the **org** and **project number** are parsed from `PROJECT_URL` (via
@@ -416,14 +417,28 @@ Finally, in the **Cloudflare Zero Trust dashboard** → *Access → Applications
 add a **self-hosted** app for `kamandar.yourdomain.com` with a policy that
 allows only your email. (Do this before sharing or bookmarking the URL.)
 
-**Daily use** — start during work hours, stop after:
+**Daily use** — one command brings up both halves. `--tunnel` spawns
+`cloudflared` as a child of `--serve` and tears it down on exit, so a single
+Ctrl-C stops the server *and* the tunnel:
+
+```sh
+kamandar --serve --tunnel        # app on 127.0.0.1:4567 + the Cloudflare Tunnel
+# → open https://kamandar.yourdomain.com, log in via Access, set Auto-refresh ~30s
+# → Ctrl-C once; both the server and the tunnel shut down. URL goes dead until next time.
+```
+
+`--tunnel` runs the tunnel named `kamandar` by default; override with
+`--tunnel <name>` or `$KAMANDAR_TUNNEL`. It reads `~/.cloudflared/config.yml`
+for the hostname mapping (above), and falls back to serving locally (with a
+warning) if `cloudflared` isn't on your `PATH`. `--tunnel` implies `--serve`.
+
+<details><summary>Prefer two terminals?</summary>
 
 ```sh
 kamandar --serve                 # terminal 1: the app on 127.0.0.1:4567
 cloudflared tunnel run kamandar  # terminal 2: bridge to kamandar.yourdomain.com
-# → open https://kamandar.yourdomain.com, set Auto-refresh to e.g. 30s, log in via Access
-# → Ctrl-C both when you're done; the URL goes dead until next time
 ```
+</details>
 
 Notes:
 

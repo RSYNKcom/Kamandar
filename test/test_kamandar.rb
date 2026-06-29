@@ -401,6 +401,26 @@ check "config --init flag sets init",
 check "viewer query asks for login",
       Kamandar::Engine.build_viewer_query.include?("viewer { login }"), true
 
+# --tunnel flag: spawns cloudflared alongside --serve.
+check "config --tunnel off by default",
+      Kamandar::Config.from(env: {}, argv: [])[:tunnel], false
+check "config --tunnel default name",
+      Kamandar::Config.from(env: {}, argv: [])[:tunnel_name], "kamandar"
+check "config --tunnel sets tunnel",
+      Kamandar::Config.from(env: {}, argv: ["--tunnel"])[:tunnel], true
+check "config --tunnel NAME sets name",
+      Kamandar::Config.from(env: {}, argv: ["--tunnel", "myedge"])[:tunnel_name], "myedge"
+check "config --tunnel=NAME sets name",
+      Kamandar::Config.from(env: {}, argv: ["--tunnel=foo"])[:tunnel_name], "foo"
+check "config --tunnel doesn't swallow next flag",
+      Kamandar::Config.from(env: {}, argv: ["--tunnel", "--port", "8080"])[:tunnel_name], "kamandar"
+check "config --tunnel port still parses",
+      Kamandar::Config.from(env: {}, argv: ["--tunnel", "--port", "8080"])[:port], 8080
+check "config KAMANDAR_TUNNEL env sets name",
+      Kamandar::Config.from(env: { "KAMANDAR_TUNNEL" => "envedge" }, argv: [])[:tunnel_name], "envedge"
+check "config --tunnel flag beats env name",
+      Kamandar::Config.from(env: { "KAMANDAR_TUNNEL" => "envedge" }, argv: ["--tunnel=cliedge"])[:tunnel_name], "cliedge"
+
 # -- interactive scope picker -------------------------------------------------
 # Feeds canned stdin; captures the prompt on a StringIO so nothing hits stderr.
 # Returns [{scope:, project_url:}, prompt_text].

@@ -63,6 +63,7 @@
 #   3. Run:
 #        ruby lib/kamandar.rb              # terminal output (default)
 #        ruby lib/kamandar.rb --serve      # live web app at http://127.0.0.1:4567
+#        ruby lib/kamandar.rb --serve --tunnel  # + a Cloudflare Tunnel child
 #        ruby lib/kamandar.rb --dashboard  # full-screen Matrix TUI (rain splash)
 #        ruby lib/kamandar.rb --browser    # render + open a static HTML page
 #        ruby lib/kamandar.rb -b --watch 60  # live tab, refreshed every 60s
@@ -1971,6 +1972,8 @@ module Kamandar
         dashboard: flags[:dashboard] || false,
         serve: flags[:serve] || false,
         demo: flags[:demo] || false,
+        tunnel: flags[:tunnel] || false,
+        tunnel_name: flags[:tunnel_name] || env["KAMANDAR_TUNNEL"] || "kamandar",
         port: flags[:port] || (env["PORT"] || Server::DEFAULT_PORT).to_i,
         project_org: project_org,
         list_statuses: flags[:statuses] || false,
@@ -2073,6 +2076,16 @@ module Kamandar
           flags[:serve] = true
         when "--demo"
           flags[:demo] = true
+        when "--tunnel"
+          flags[:tunnel] = true
+          nxt = argv[i + 1]
+          if nxt && !nxt.start_with?("-")
+            flags[:tunnel_name] = nxt
+            i += 1
+          end
+        when /\A--tunnel=(.+)\z/
+          flags[:tunnel] = true
+          flags[:tunnel_name] = Regexp.last_match(1)
         when "--port"
           flags[:port] = argv[i + 1].to_i
           i += 1
@@ -2115,7 +2128,8 @@ module Kamandar
       return print_statuses(config) if config[:list_statuses]
 
       # The live web UI picks its own scope in-page, so skip the stdin picker.
-      return run_server(config) if config[:serve]
+      # --tunnel implies --serve (there must be a local server to expose).
+      return run_server(config) if config[:serve] || config[:tunnel]
 
       if surface == :terminal && !config[:scope_given] && $stdin.tty?
         picked = prompt_scope(config)
@@ -2235,10 +2249,12 @@ module Kamandar
     # time (single-user); a fetch failure renders an error page, not a crash.
     # SECURITY: binds 127.0.0.1 only, and the token never reaches any response.
     def run_server(config, host: Server::HOST, open: true)
+      tunnel_pid = nil
       port   = config[:port].to_i
       port   = Server::DEFAULT_PORT if port <= 0
-      server = TCPServer.new(host, port)
+      server = TCPServer.new(host, port) # binds 127.0.0.1 — raises EADDRINUSE before any tunnel starts
       url    = "http://#{host}:#{port}"
+      tunnel_pid = start_tunnel(config, port: port)
       $stderr.puts "kamandar: serving your queue at #{url}  (Ctrl-C to stop)"
       open_url(url) if open
 
@@ -2258,7 +2274,46 @@ module Kamandar
     rescue Interrupt
       $stderr.puts "\nkamandar: server stopped."
     ensure
+      stop_tunnel(tunnel_pid)
       server&.close
+    end
+
+    # Optionally bring the Cloudflare Tunnel up as a child process, so a single
+    # `kamandar --serve --tunnel` both serves locally and exposes the public
+    # hostname. cloudflared is an external binary the user installs (no Ruby
+    # dependency); the server still binds 127.0.0.1 and cloudflared dials it.
+    # Returns the child pid, or nil when disabled / cloudflared isn't installed.
+    def start_tunnel(config, port:, out: $stderr)
+      return nil unless config[:tunnel]
+
+      name = config[:tunnel_name]
+      unless tunnel_available?
+        out.puts "kamandar: --tunnel needs `cloudflared` on your PATH — serving locally only."
+        return nil
+      end
+
+      out.puts "kamandar: starting Cloudflare Tunnel '#{name}' → 127.0.0.1:#{port}…"
+      pid = Process.spawn("cloudflared", "tunnel", "run", name)
+      out.puts "kamandar: tunnel '#{name}' up (pid #{pid}); public hostname is the one in your cloudflared config."
+      pid
+    rescue StandardError => e
+      out.puts "kamandar: couldn't start tunnel (#{e.message}) — serving locally only."
+      nil
+    end
+
+    def tunnel_available?
+      system("command -v cloudflared > /dev/null 2>&1")
+    end
+
+    # TERM the tunnel child and reap it so Ctrl-C tears down both halves cleanly.
+    def stop_tunnel(pid, out: $stderr)
+      return unless pid
+
+      out.puts "kamandar: stopping tunnel (pid #{pid})…"
+      Process.kill("TERM", pid)
+      Process.wait(pid)
+    rescue Errno::ESRCH, Errno::ECHILD
+      # already exited — nothing to reap
     end
 
     # Open a full URL (http) in the default browser — unlike BrowserSurface's
