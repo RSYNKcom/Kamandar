@@ -15,7 +15,7 @@ the opt-in `--serve`, bound to localhost.
 
 ![Ruby](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
-![Tests](https://img.shields.io/badge/tests-183%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-209%20passing-2ea44f)
 ![Serverless](https://img.shields.io/badge/serverless-no%20server%20·%20no%20DB%20·%20no%20OAuth-0969da)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)
@@ -103,10 +103,11 @@ ruby lib/kamandar.rb --browser   # render + open a static HTML page
 ruby lib/kamandar.rb -b --watch 60   # live tab, refreshed every 60s
 ```
 
-> **`--serve`** is the graphical app: a localhost-only web page with in-page
-> scope switching, a refresh button, and optional auto-poll. Pure stdlib
-> (`TCPServer`), no gems, bound to `127.0.0.1` only, and — like every surface —
-> the token never reaches the page. Use `--port N` (or `PORT`) to change the port.
+> **`--serve`** is the graphical app: a localhost-only web page with a sidebar +
+> tabbed buckets, in-page scope switching, a refresh button, and optional
+> auto-poll — pure HTML + CSS, no JavaScript. Pure stdlib (`TCPServer`), no gems,
+> bound to `127.0.0.1` only, and — like every surface — the token never reaches
+> the page. Use `--port N` (or `PORT`) to change the port.
 
 > `PROJECT_URL` is **optional** — the [scope picker](#-scope) asks for the board
 > URL when you choose `project`. Set it only if you want bucket #3
@@ -129,7 +130,7 @@ Kamandar/
 ├── lib/
 │   └── kamandar.rb     # engine + all surfaces + local server (single file, stdlib only)
 ├── test/
-│   └── test_kamandar.rb  # acceptance tests — zero network, 183 cases
+│   └── test_kamandar.rb  # acceptance tests — zero network, 209 cases
 ├── README.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -295,16 +296,37 @@ alt-screen buffer and always restores it on exit. Needs an interactive TTY
 ### Live web app (`--serve`)
 
 A **localhost-only** web page served by a minimal stdlib `TCPServer` — the
-graphical, app-like surface. Switch scope, refresh, and set an auto-poll
-interval right in the page; it re-fetches server-side per request. Bound to
-`127.0.0.1` only, `--port N` (or `PORT`) to change the port, and — like every
-surface — the token never reaches any response. A fetch blip renders an error
-page instead of dropping the server.
+graphical, app-like surface. It re-fetches and re-classifies server-side per
+request; bound to `127.0.0.1` only, `--port N` (or `PORT`) to change the port,
+and — like every surface — the token never reaches any response. A fetch blip
+renders an error page instead of dropping the server.
 
 ```sh
 ruby lib/kamandar.rb --serve            # http://127.0.0.1:4567
 ruby lib/kamandar.rb --serve --port 8080
 ```
+
+The page is a small "command center" UI, and it's **pure HTML + CSS — no
+JavaScript**:
+
+- **Sticky app header** — a frosted top nav (brand, status chips, GitHub repo
+  link) over a **toolbar row** with the scope control. The scope picker is a
+  segmented control; the page shows just what each scope needs — `global` is
+  only the picker + **Apply** + **refresh**, while `org`/`repo` reveal the name
+  field, `project` reveals the board URL, and any non-global scope reveals the
+  **auto-refresh** interval. The reveal is driven by CSS `:has()`, no scripting.
+- **Sidebar + tabs** — buckets become tabs in two cards: **Others' work**
+  (reviews requested from you) and **Your work** (your assigned issues/PRs).
+  Each card shows its own open count; the selected tab fills with the bucket's
+  color. Tab switching is pure-CSS (a hidden radio per bucket).
+- **Main panel** — the selected bucket, with a one-line description of what it
+  collects under the heading, the matching cards, or a centered empty-state
+  card when nothing's waiting.
+- **Footer** — version, the localhost/stdlib note, repo link, and the
+  generated-at time.
+- Loads the **Google Sans** webfont (the one network asset, allowed here since
+  the served page is online), falling back to the system font stack. Tracks
+  light/dark via `prefers-color-scheme`.
 
 ### Browser (offline file)
 
