@@ -33,7 +33,13 @@ sed -e "s#__RUBY__#$RUBY#g" \
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 # Reap any orphaned kamandar tunnel from a hard-killed prior run before respawn.
 pkill -f "cloudflared tunnel run kamandar" 2>/dev/null || true
-launchctl bootstrap "$DOMAIN" "$DEST"
+# launchd needs a beat to fully tear the old service down — bootstrapping too soon
+# returns "5: Input/output error". Settle, then retry once if it still races.
+sleep 1
+if ! launchctl bootstrap "$DOMAIN" "$DEST" 2>/dev/null; then
+  sleep 2
+  launchctl bootstrap "$DOMAIN" "$DEST"
+fi
 launchctl enable "$DOMAIN/$LABEL"
 launchctl kickstart -k "$DOMAIN/$LABEL"
 

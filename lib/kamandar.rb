@@ -1725,12 +1725,18 @@ module Kamandar
         .foot .grow{flex:1 1 auto}
         .foot .ghlink{border:none;padding:0;font-weight:600}
         @media (max-width:720px){
-          .app{flex-direction:column;gap:14px}
-          .sidebar{position:static;width:auto}
-          .sidebar nav{flex-direction:row;flex-wrap:wrap}
-          .navitem{flex:0 0 auto}
-          .navtitle{display:none}
-          .side-head,.side-foot{display:none}
+          /* use the full screen width — the 70% desktop column wastes phone space */
+          .nav-wrap,.controls,.app,.foot-wrap{max-width:100%}
+          .app{flex-direction:column;gap:10px;padding:16px 14px 40px}
+          /* flatten the sidebar cards into clean wrapping pill strips */
+          .sidebar{position:static;width:auto;gap:10px}
+          .sidebox{background:none;border:none;box-shadow:none;padding:0}
+          .side-head{padding:0 2px 6px;border-bottom:none}
+          .side-foot{display:none}
+          .sidebar nav{flex-direction:row;flex-wrap:wrap;gap:7px;margin-top:7px}
+          .navitem{flex:0 0 auto;border:1px solid var(--border);background:var(--card);padding:6px 11px;border-radius:999px;gap:7px}
+          .navtitle{flex:0 0 auto;font-size:.84rem}
+          .navitem .icon{font-size:.95rem;line-height:1}
           .topbar .controls{margin:0;width:100%}
         }
       CSS
