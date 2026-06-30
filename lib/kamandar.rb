@@ -1979,6 +1979,7 @@ module Kamandar
         theme: (flags[:theme] || env["THEME"] || "").to_s.strip.downcase,
         dashboard: flags[:dashboard] || false,
         serve: flags[:serve] || false,
+        no_open: flags[:no_open] || false,
         demo: flags[:demo] || false,
         tunnel: flags[:tunnel] || false,
         tunnel_name: flags[:tunnel_name] || env["KAMANDAR_TUNNEL"] || "kamandar",
@@ -2082,6 +2083,8 @@ module Kamandar
           flags[:dashboard] = true
         when "--serve"
           flags[:serve] = true
+        when "--no-open"
+          flags[:no_open] = true
         when "--demo"
           flags[:demo] = true
         when "--tunnel"
@@ -2143,7 +2146,7 @@ module Kamandar
 
       # The live web UI picks its own scope in-page, so skip the stdin picker.
       # --tunnel implies --serve (there must be a local server to expose).
-      return run_server(config) if config[:serve] || config[:tunnel]
+      return run_server(config, open: !config[:no_open]) if config[:serve] || config[:tunnel]
 
       if surface == :terminal && !config[:scope_given] && $stdin.tty?
         picked = prompt_scope(config)

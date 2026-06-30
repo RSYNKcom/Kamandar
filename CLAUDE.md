@@ -19,7 +19,12 @@ ruby lib/kamandar.rb --dashboard    # full-screen Matrix TUI (rain splash; r=ref
 ruby lib/kamandar.rb --browser      # render + open static HTML page
 ruby lib/kamandar.rb -b --watch 60  # live browser tab, re-fetch every 60s
 ruby lib/kamandar.rb --serve --demo # fabricated data (no token) — screenshots/offline trials
+ruby lib/kamandar.rb --serve --no-open # serve headless — don't auto-open a browser tab
+./service/install-service.sh        # persist --serve as a launchd LaunchAgent (macOS; always-on)
+./service/uninstall-service.sh      # stop + remove that LaunchAgent
 ```
+
+`--serve` can run as an always-on macOS service: `service/install-service.sh` renders `service/com.kamandar.serve.plist` (filling in this machine's repo/ruby/home) into `~/Library/LaunchAgents`, then `bootstrap`s it with `RunAtLoad` + `KeepAlive`. The agent runs `--serve --no-open` (headless) with `KAMANDAR_CONFIG` → repo `.env` (git-ignored; holds the token). Local-only — no `--tunnel`; binds `127.0.0.1`. Logs: `~/Library/Logs/kamandar.{out,err}.log`.
 
 Required config to actually run (not needed for tests): `GITHUB_TOKEN` (classic PAT: `repo, read:org, read:project`), `GH_LOGIN`. Optional: `PROJECT_URL` (enables bucket #3), `STALE_DAYS`, `DAY_MODE`, `NOT_STARTED_STATUSES`, `ITERATION_FILTER`, `ITERATION_FIELD`. Supply via shell env **or** a persisted config file (`--init` writes it). See the README config table or the header comment in `lib/kamandar.rb`.
 

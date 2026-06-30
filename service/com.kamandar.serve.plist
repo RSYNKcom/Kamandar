@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Kamandar persistent web-app LaunchAgent (macOS, per-user).
+
+  This is a TEMPLATE. Do not load it directly — the __PLACEHOLDERS__ are
+  filled in by service/install-service.sh, which writes the rendered copy to
+  ~/Library/LaunchAgents/com.kamandar.serve.plist and bootstraps it.
+
+  Runs `kamandar --serve --no-open` headless on 127.0.0.1, loading the token
+  and login from the repo .env via KAMANDAR_CONFIG. RunAtLoad starts it at
+  login; KeepAlive restarts it if it ever exits. --no-open stops a browser
+  tab spawning on every (re)start. Still binds 127.0.0.1 only — no exposure.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kamandar.serve</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__RUBY__</string>
+    <string>__REPO__/lib/kamandar.rb</string>
+    <string>--serve</string>
+    <string>--no-open</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KAMANDAR_CONFIG</key>
+    <string>__REPO__/.env</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/kamandar.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/kamandar.err.log</string>
+</dict>
+</plist>

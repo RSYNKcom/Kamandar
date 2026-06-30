@@ -421,6 +421,13 @@ check "config KAMANDAR_TUNNEL env sets name",
 check "config --tunnel flag beats env name",
       Kamandar::Config.from(env: { "KAMANDAR_TUNNEL" => "envedge" }, argv: ["--tunnel=cliedge"])[:tunnel_name], "cliedge"
 
+# --no-open flag: suppresses the browser auto-open (the persistent --serve daemon
+# must not spawn a tab on every KeepAlive restart). Off by default.
+check "config --no-open off by default",
+      Kamandar::Config.from(env: {}, argv: [])[:no_open], false
+check "config --no-open sets no_open",
+      Kamandar::Config.from(env: {}, argv: ["--serve", "--no-open"])[:no_open], true
+
 # -- interactive scope picker -------------------------------------------------
 # Feeds canned stdin; captures the prompt on a StringIO so nothing hits stderr.
 # Returns [{scope:, project_url:}, prompt_text].

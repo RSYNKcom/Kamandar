@@ -1,5 +1,8 @@
 .DS_Store
 
+# Local secrets — token + login for the persistent --serve daemon. Never commit.
+.env
+
 # Heavy image sources kept local — runtime uses the inlined logo (data URI in
 # lib/kamandar.rb) plus the small derived assets below. Regenerate logo-web.png
 # from the master with:

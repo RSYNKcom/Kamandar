@@ -110,7 +110,25 @@ kamandar --dashboard             # full-screen Matrix TUI (digital-rain splash)
 kamandar --browser               # render + open a static HTML page
 kamandar -b --watch 60           # live tab, refreshed every 60s
 kamandar --serve --demo          # fake data, no token — for screenshots/trials
+kamandar --serve --no-open       # serve headless (don't auto-open a browser tab)
 ```
+
+### Run it persistently (macOS)
+
+Keep the web app always-on — starts at login, restarts if it ever exits:
+
+```sh
+ruby lib/kamandar.rb --init      # if you haven't already (saves token + login)
+cp ~/.config/kamandar/config .env   # seed the daemon's env (token + login + PORT)
+./service/install-service.sh     # render + load the launchd LaunchAgent
+# → http://127.0.0.1:4567 (logs: ~/Library/Logs/kamandar.{out,err}.log)
+
+./service/uninstall-service.sh   # stop & remove the service
+```
+
+The agent runs `kamandar --serve --no-open` (headless, `127.0.0.1` only) with
+`KAMANDAR_CONFIG` pointed at the repo `.env`. `.env` holds your token, so it's
+git-ignored — never commit it.
 
 > Prefer not to install? Everything also runs in place as `ruby lib/kamandar.rb …`.
 
