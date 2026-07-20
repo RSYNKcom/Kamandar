@@ -2377,8 +2377,11 @@ module Kamandar
     # Live web UI: a localhost-only HTTP server that re-fetches per request and
     # serves the colorful page with in-page scope controls. One request at a
     # time (single-user); a fetch failure renders an error page, not a crash.
-    # SECURITY: binds 127.0.0.1 only, and the token never reaches any response.
-    def run_server(config, host: Server::HOST, open: true)
+    # SECURITY: binds 127.0.0.1 by default, and the token never reaches any
+    # response. KAMANDAR_HOST=0.0.0.0 opts into binding all interfaces — only
+    # for running behind a trusted reverse proxy (e.g. in a container); never
+    # expose the queue directly on an untrusted network.
+    def run_server(config, host: (ENV["KAMANDAR_HOST"] || Server::HOST), open: true)
       tunnel_pid = nil
       # launchd stops the service with SIGTERM; Ruby's default TERM exits without
       # running `ensure`, which would orphan the cloudflared child. Route TERM
